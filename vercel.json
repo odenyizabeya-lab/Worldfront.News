@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "server/index.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["public/**", "data/**", "node_modules/sql.js/dist/sql-wasm.wasm"],
+        "maxDuration": 30
+      }
+    }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "server/index.js" },
+    { "src": "/sitemap.xml", "dest": "server/index.js" },
+    { "src": "/robots.txt", "dest": "server/index.js" },
+    { "src": "/(css|js|icons)/(.*)", "dest": "server/index.js" },
+    { "src": "/(manifest\\.webmanifest|sw\\.js)", "dest": "server/index.js" },
+    { "src": "/(.*)", "dest": "server/index.js" }
+  ],
+  "env": {
+    "SITE_URL": "https://worldfront.news"
+  },
+  "crons": [
+    { "path": "/api/cron/shop-publish", "schedule": "0 0 * * *" },
+    { "path": "/api/cron/shop-redeploy", "schedule": "30 0 * * *" }
+  ]
+}

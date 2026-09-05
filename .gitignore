@@ -1,0 +1,15 @@
+node_modules/
+data/*.sqlite
+data/*.tmp
+.env
+android/
+www/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+.vercel/
+*.keystore
+
+.vercel
+.env*

@@ -1,0 +1,23 @@
+{
+  "name": "WorldFront.News - Global News",
+  "short_name": "WorldFront",
+  "description": "Trusted news from every country in the world. Browse by country, region and category; follow breaking news.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b4ea2",
+  "theme_color": "#0b4ea2",
+  "lang": "en",
+  "categories": ["news", "politics"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Breaking News", "url": "/breaking", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Latest", "url": "/latest", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "World Map", "url": "/map", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

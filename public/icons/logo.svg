@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b4ea2"/>
+      <stop offset="1" stop-color="#0a7ed4"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <circle cx="32" cy="30" r="13" fill="none" stroke="#ffffff" stroke-width="2.2"/>
+  <ellipse cx="32" cy="30" rx="13" ry="5.5" fill="none" stroke="#ffffff" stroke-width="2.2"/>
+  <path d="M19 30h26M32 17v26" stroke="#ffffff" stroke-width="1.4" opacity="0.6"/>
+  <circle cx="32" cy="30" r="2.5" fill="#ffffff"/>
+  <text x="32" y="57" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#ffffff" letter-spacing="0.5">W.F</text>
+</svg>

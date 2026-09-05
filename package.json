@@ -1,0 +1,39 @@
+{
+  "name": "worldfront-news",
+  "version": "1.0.0",
+  "description": "WorldFront.News - Real global news platform",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "postinstall": "node server/integrations/build-regenerate.js",
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "seed": "node server/seed.js",
+    "fetch": "node server/ingest/run.js",
+    "images": "node server/ingest/backfillimages.js",
+    "shop:sync": "node server/integrations/cli-sync.js",
+    "shop:publish-preview": "node server/integrations/cli-publish.js press",
+    "shop:publish-daily": "node server/integrations/cli-publish.js all",
+    "test": "node --test server/test/api.test.js",
+
+    "android:init": "npm i -D @capacitor/cli @capacitor/core @capacitor/android @capacitor/geolocation && npx cap add android",
+    "android:sync": "npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:build-debug": "cd android && gradlew assembleDebug",
+    "android:build-appbundle": "cd android && gradlew bundleRelease",
+    "chrome:run": "start chrome --app=http://localhost:3000"
+  },
+  "keywords": ["news", "world", "global", "international", "journalism"],
+  "author": "WorldFront.News",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-cron": "^3.0.3",
+    "rss-parser": "^3.13.0",
+    "sql.js": "^1.10.3"
+  }
+}

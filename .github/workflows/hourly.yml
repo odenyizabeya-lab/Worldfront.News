@@ -1,0 +1,31 @@
+name: Hourly WorldFront publishing
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hourly-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger hourly shop publish + rebuild
+        env:
+          HOURLY_CRON_TOKEN: ${{ secrets.HOURLY_CRON_TOKEN }}
+        run: |
+          code=$(curl -s -o /tmp/wf-hourly.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${HOURLY_CRON_TOKEN}" \
+            -H "Content-Type: application/json" \
+            https://www.worldfront.news/api/cron/shop-tick)
+          echo "status=$code"
+          cat /tmp/wf-hourly.json
+          echo
+          if [ "$code" != "200" ]; then exit 1; fi

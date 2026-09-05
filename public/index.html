@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>WorldFront.News — Global News Platform</title>
+  <meta name="description" content="WorldFront.News — trusted news from every country in the world. Latest, breaking, politics, business, technology and more. Browse by country, region, category." />
+  <meta name="keywords" content="world news, global news, breaking news, international news, news by country, WorldFront" />
+  <meta name="theme-color" content="#0b4ea2" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="WorldFront" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="icon" type="image/svg+xml" href="/icons/logo.svg" />
+  <meta property="og:site_name" content="WorldFront.News" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="WorldFront.News — Global News Platform" />
+  <meta property="og:description" content="Trusted news from every country in the world." />
+  <meta property="og:image" content="https://worldfront.news/icons/icon-512.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="WorldFront.News — Global News Platform" />
+  <meta name="twitter:description" content="Trusted news from every country in the world." />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body data-theme="auto">
+  <!-- Top bar -->
+  <header class="site-header" id="siteHeader">
+    <div class="header-inner">
+      <button class="icon-btn" id="menuBtn" aria-label="Open menu">
+        <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+      </button>
+
+      <a href="/" class="brand" data-nav="/">
+        <img src="/icons/logo.svg" alt="WorldFront.News logo" class="brand-logo" width="34" height="34" />
+        <span class="brand-text">WorldFront<span class="brand-dot">.News</span></span>
+      </a>
+
+      <nav class="main-nav" id="mainNav">
+        <a href="/latest" data-nav="/latest">Latest</a>
+        <a href="/world" data-nav="/world">World</a>
+        <a href="/breaking" data-nav="/breaking">Breaking</a>
+        <a href="/map" data-nav="/map">Map</a>
+        <a href="/shop" data-nav="/shop">Shop</a>
+      </nav>
+
+      <div class="header-actions">
+        <button class="icon-btn" id="searchBtn" aria-label="Search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none"/><path d="M20 20l-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <button class="icon-btn" id="themeBtn" aria-label="Toggle theme">
+          <svg viewBox="0 0 24 24" id="themeIcon"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z" fill="currentColor"/></svg>
+        </button>
+        <button class="icon-btn" id="locBtn" aria-label="Your location">
+          <svg viewBox="0 0 24 24"><path d="M12 21s-7-5.1-7-11a7 7 0 0 1 14 0c0 5.9-7 11-7 11z" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="10" r="2.5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+        <button class="icon-btn" id="userBtn" aria-label="Account">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2" fill="none"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Search panel -->
+  <div class="search-panel" id="searchPanel">
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" class="search-ico"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none"/><path d="M20 20l-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input type="search" id="searchInput" placeholder="Search headlines, topics, countries, categories..." autocomplete="off" />
+      <button class="icon-btn" id="searchClose">✕</button>
+    </div>
+    <div class="search-results" id="searchResults"></div>
+  </div>
+
+  <!-- Location panel -->
+  <div class="location-panel" id="locationPanel">
+    <div class="loc-header">
+      <h3>Set your location</h3>
+      <button class="icon-btn" id="locClose">✕</button>
+    </div>
+    <p class="loc-hint">Choose a place to get news local to you. Your exact position is never shared publicly.</p>
+    <div class="field">
+      <label>Country</label>
+      <select id="locCountry"></select>
+    </div>
+    <div class="field">
+      <label>Region / State</label>
+      <select id="locRegion" disabled><option value="">Select country first</option></select>
+    </div>
+    <div class="field">
+      <label>City</label>
+      <input type="text" id="locCity" placeholder="City or area (optional)" />
+    </div>
+    <button class="btn btn-primary btn-block" id="locSave">Save location</button>
+    <div class="loc-gps">
+      <label class="switch">
+        <input type="checkbox" id="locGps" />
+        <span class="slider"></span>
+        <span>Use my location (GPS) for "news near me"</span>
+      </label>
+      <button class="btn btn-outline btn-block" id="locGpsBtn">Find news near me</button>
+      <div class="loc-near" id="locNear"></div>
+    </div>
+  </div>
+
+  <!-- Persistent Live-TV breaking news overlay (fixed at top, stays on scroll) -->
+  <div class="breaking-overlay" id="breakingOverlay" hidden>
+    <!-- Flashing red top bar -->
+    <div class="breaking-flash-bar"></div>
+
+    <div class="wfront-hero">
+      <div class="wfront-topline">
+        <div class="wfront-livebox">
+          <span class="live-dot"></span>
+          <span class="live-text">LIVE</span>
+        </div>
+        <span class="wfront-now" id="wfrontClock"></span>
+      </div>
+      <div class="wfront-badgestrip" id="wfrontBadges">
+        <span class="b-badge b-breaking active">BREAKING</span>
+        <span class="b-badge b-news">NEWS</span>
+      </div>
+
+      <!-- Main area: cycles through stories with image bg -->
+      <div class="wfront-main" id="wfrontMain">
+        <div class="wm-slide active" id="wmSlide">
+          <div class="wm-image-wrap" id="wmBg">
+            <img id="wmImg" alt="" />
+            <div class="wm-image-overlay"></div>
+          </div>
+          <div class="wm-loading" id="wmLoading"><span class="spinner"></span></div>
+          <div class="wm-content">
+            <div class="wm-label-row"><span class="wm-breaking-label">BREAKING NEWS</span><span class="wm-story-num" id="wmStoryNum">1 / 1</span></div>
+            <a class="wm-text" id="wmHeadline" href="/#/latest">Loading...</a>
+            <span class="wm-source" id="wmSource"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Red bottom bar -->
+      <div class="breaking-flash-bar breaking-flash-bar--bottom"></div>
+    </div>
+
+    <!-- Lower-third ticker -->
+    <div class="lower-third">
+      <span class="lt-label">⬤ ON AIR</span>
+      <div class="lt-track" id="ltTrack"></div>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <main id="app"></main>
+
+  <!-- Bottom nav (mobile) -->
+  <nav class="bottom-nav" id="bottomNav">
+    <a href="/" data-nav="/" ><span class="bn-ico">🏠</span><span>Home</span></a>
+    <a href="/latest" data-nav="/latest"><span class="bn-ico">🕒</span><span>Latest</span></a>
+    <a href="/map" data-nav="/map"><span class="bn-ico">🗺️</span><span>Map</span></a>
+    <a href="/world" data-nav="/world"><span class="bn-ico">🌍</span><span>World</span></a>
+    <a href="/shop" data-nav="/shop"><span class="bn-ico">🛍️</span><span>Shop</span></a>
+    <a href="#" id="bnLoc"><span class="bn-ico">📍</span><span>My News</span></a>
+  </nav>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <img src="/icons/logo.svg" width="28" height="28" alt="" />
+        <strong>WorldFront.News</strong>
+      </div>
+      <p class="footer-tagline">Real news from every corner of the world. © <span id="year"></span> WorldFront.News. All rights reserved.</p>
+      <nav class="footer-links">
+        <a href="/about" data-nav="/about">About</a>
+        <a href="/admin" data-nav="/admin">Admin</a>
+        <a href="/privacy" data-nav="/privacy">Privacy</a>
+        <a href="/terms" data-nav="/terms">Terms</a>
+      </nav>
+    </div>
+  </footer>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/js/app.js" defer></script>
+  <script src="/js/router.js" defer></script>
+  <script src="/js/views.js" defer></script>
+  <script src="/js/admin.js" defer></script>
+  <script src="/js/auth.js" defer></script>
+</body>
+</html>
