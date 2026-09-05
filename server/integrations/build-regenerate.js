@@ -14,8 +14,10 @@
 // makes the current day's editions DURABLE across cold starts (a cold function
 // starts from this bundled snapshot instead of the previous day's).
 //
-// The script never fails a build: any error logs and exits 0 so deploys are
-// never blocked (the previous bundled DB is kept as a fallback).
+// The script fails the build ONLY when the bundled DB is missing entirely
+// (which would ship an empty site and was the failure mode of git-triggered
+// builds); every other error logs and exits 0 so deploys are never blocked
+// (the previous bundled DB is kept as a fallback).
 const fs = require('fs');
 const path = require('path');
 
@@ -23,8 +25,8 @@ async function main() {
   const dataDir = path.join(__dirname, '..', '..', 'data');
   const dbFile = path.join(dataDir, 'worldfront.sqlite');
   if (!fs.existsSync(dbFile)) {
-    console.log('[build-regenerate] no bundled DB present — skipping');
-    return;
+    console.log('[build-regenerate] FATAL: no bundled DB present — refusing to ship an empty site');
+    process.exit(1);
   }
   const db = require('../db');
   const shop = require('./weverse-shop');

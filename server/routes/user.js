@@ -73,6 +73,44 @@ router.get('/me', auth.requireAuth, (req, res) => {
   res.json({ user: req.user });
 });
 
+// ---- Change email / password (requiring the current password) ----
+router.post('/me/change-email', auth.requireAuth, (req, res) => {
+  const { current_password, new_email } = req.body || {};
+  if (!current_password) return res.status(400).json({ error: 'Current password is required' });
+  const email = String(new_email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address' });
+  const user = db.get('SELECT * FROM users WHERE id=?', [req.user.id]);
+  if (!user) return res.status(404).json({ error: 'Account not found' });
+  if (!bcrypt.compareSync(current_password, user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+  const taken = db.get('SELECT id FROM users WHERE email=? AND id!=?', [email, user.id]);
+  if (taken) return res.status(409).json({ error: 'That email is already in use' });
+  db.run('UPDATE users SET email=? WHERE id=?', [email, user.id]);
+  db.persist();
+  res.json({ success: true, user: { id: user.id, email, username: user.username, role: user.role } });
+});
+
+router.post('/me/change-password', auth.requireAuth, (req, res) => {
+  const { current_password, new_password } = req.body || {};
+  if (!current_password) return res.status(400).json({ error: 'Current password is required' });
+  if (!new_password || String(new_password).length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  }
+  const user = db.get('SELECT * FROM users WHERE id=?', [req.user.id]);
+  if (!user || !bcrypt.compareSync(current_password, user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+  const hash = bcrypt.hashSync(String(new_password), 10);
+  db.run('UPDATE users SET password_hash=? WHERE id=?', [hash, user.id]);
+  // Invalidate every other active session so only the current one stays signed in.
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (token) db.run('DELETE FROM sessions WHERE user_id=? AND token!=?', [user.id, token]);
+  db.persist();
+  res.json({ success: true, message: 'Password updated' });
+});
+
 // Saved articles
 router.get('/saved', auth.requireAuth, (req, res) => {
   const rows = db.all(

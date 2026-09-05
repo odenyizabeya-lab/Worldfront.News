@@ -313,6 +313,229 @@ async function initialize() {
     created_at INTEGER,
     PRIMARY KEY (country_code, pub_date)
   );
+
+  -- =====================================================================
+  -- GLOBAL LOCATION SYSTEM (WorldFront.News)
+  -- Real, hierarchical, verifiable locations for news, properties,
+  -- vehicles, shops, businesses and map integration.
+  --
+  -- Hierarchy:
+  --   country → (state|province|region) → (county|department|prefecture)
+  --           → (city|town|village) → (district|ward|borough)
+  --           → street → (house/building number)
+  --
+  -- Only real, verified locations are stored. Unverified data is flagged.
+  -- type values: country|state|province|region|county|department|prefecture|
+  --              city|town|village|district|ward|borough|street|landmark|bus_stop
+  -- =====================================================================
+  CREATE TABLE IF NOT EXISTS geo_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    country_code TEXT,
+    parent_id INTEGER,
+    slug TEXT UNIQUE,
+    postal_code TEXT,
+    lat REAL,
+    lng REAL,
+    verified INTEGER DEFAULT 0,
+    approximate INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'approved',
+    meta TEXT,
+    created_at INTEGER,
+    updated_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_geo_type ON geo_locations(type);
+  CREATE INDEX IF NOT EXISTS idx_geo_country ON geo_locations(country_code);
+  CREATE INDEX IF NOT EXISTS idx_geo_parent ON geo_locations(parent_id);
+
+  -- Rich property/vehicle records pulled from the showroom (single source of
+  -- truth per property_id). Every listing keeps its own accurate address,
+  -- coordinates, media, specs and status.
+  CREATE TABLE IF NOT EXISTS property_details (
+    property_id TEXT PRIMARY KEY,
+    listing_id TEXT,
+    listing_type TEXT,
+    category TEXT,
+    subcategory TEXT,
+    title TEXT,
+    description TEXT,
+    price REAL,
+    currency TEXT DEFAULT 'USD',
+    country TEXT,
+    country_code TEXT,
+    state TEXT,
+    city TEXT,
+    town TEXT,
+    village TEXT,
+    district TEXT,
+    neighborhood TEXT,
+    street TEXT,
+    house_number TEXT,
+    postal_code TEXT,
+    landmark TEXT,
+    lat REAL,
+    lng REAL,
+    video TEXT,
+    video_url TEXT,
+    images TEXT,
+    bedrooms TEXT,
+    bathrooms TEXT,
+    building_size TEXT,
+    land_size TEXT,
+    parking_spaces TEXT,
+    features TEXT,
+    condition TEXT,
+    listing_status TEXT,
+    coordinates_verified INTEGER DEFAULT 0,
+    location_verified INTEGER DEFAULT 0,
+    media_verified INTEGER DEFAULT 0,
+    fetched_at INTEGER,
+    raw TEXT,
+    UNIQUE (property_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_prop_country ON property_details(country_code);
+  CREATE INDEX IF NOT EXISTS idx_prop_city ON property_details(city);
+
+  -- Join table linking any listing (property/vehicle/product/street) to a
+  -- geo_locations row. Keeps the connection between listing, location and page.
+  CREATE TABLE IF NOT EXISTS listing_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_kind TEXT NOT NULL,
+    listing_id TEXT NOT NULL,
+    location_id INTEGER NOT NULL,
+    relation TEXT DEFAULT 'primary',
+    created_at INTEGER,
+    UNIQUE (listing_kind, listing_id, relation)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ll_listing ON listing_locations(listing_kind, listing_id);
+  CREATE INDEX IF NOT EXISTS idx_ll_location ON listing_locations(location_id);
+
+  -- Technical SEO quality-control report snapshots (admin reports).
+  CREATE TABLE IF NOT EXISTS seo_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at INTEGER,
+    scope TEXT,
+    issues TEXT,
+    stats TEXT
+  );
+
+  -- URL registry used by the QA system to validate every indexed page.
+  CREATE TABLE IF NOT EXISTS indexed_urls (
+    url TEXT PRIMARY KEY,
+    kind TEXT,
+    lastmod INTEGER,
+    status_code INTEGER DEFAULT 200,
+    title TEXT,
+    meta_description TEXT,
+    canonical TEXT,
+    h1 TEXT,
+    has_jsonld INTEGER DEFAULT 0,
+    has_image INTEGER DEFAULT 0,
+    last_checked INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_urls_kind ON indexed_urls(kind);
+
+  -- Google Search Console indexing log (never stores secrets/credentials).
+  CREATE TABLE IF NOT EXISTS sc_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT,
+    action TEXT,
+    status TEXT,
+    message TEXT,
+    created_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_sc_url ON sc_log(url);
+
+  -- First-party pageview counter: real per-URL reach numbers for the QA/SEO
+  -- dashboard. Created on demand, so older databases pick it up automatically.
+  CREATE TABLE IF NOT EXISTS pageviews (
+    url TEXT PRIMARY KEY,
+    views INTEGER DEFAULT 0,
+    last_seen INTEGER
+  );
+
+  -- =====================================================================
+  -- MULTI-PLATFORM DISTRIBUTION (WorldFront.News)
+  -- Publish once on WF → distribute to every eligible platform.
+  -- Every row is a REAL platform with its true requirement level; nothing
+  -- is ever marked "shared" unless a real HTTP exchange confirmed it.
+  -- access: none | free_key | oauth | webhook | manual | paid
+  -- method: api | rss_discovery | oauth | webhook | manual | submission
+  -- =====================================================================
+  CREATE TABLE IF NOT EXISTS dist_platforms (
+    slug TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    country_code TEXT DEFAULT 'XX',
+    region TEXT DEFAULT 'Global',
+    url TEXT,
+    signup_url TEXT,
+    content_types TEXT DEFAULT '["articles"]',
+    access TEXT NOT NULL,
+    method TEXT NOT NULL,
+    api_required INTEGER DEFAULT 0,
+    email_verification INTEGER DEFAULT 1,
+    manual_approval INTEGER DEFAULT 0,
+    paid INTEGER DEFAULT 0,
+    notes TEXT,
+    status TEXT DEFAULT 'new',
+    auto_create INTEGER DEFAULT 0,
+    discovered_at INTEGER,
+    last_checked INTEGER,
+    last_success INTEGER,
+    last_failure INTEGER,
+    failure_message TEXT,
+    score INTEGER DEFAULT 0,
+    meta TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_dist_platforms_status ON dist_platforms(status);
+  CREATE INDEX IF NOT EXISTS idx_dist_platforms_access ON dist_platforms(access);
+
+  -- Connected account/API credentials + health per platform (user-owned store).
+  CREATE TABLE IF NOT EXISTS dist_connectors (
+    platform_slug TEXT PRIMARY KEY,
+    account_label TEXT,
+    creds TEXT,
+    linked INTEGER DEFAULT 0,
+    connected_at INTEGER,
+    last_success INTEGER,
+    last_failure INTEGER,
+    failure_message TEXT,
+    retries INTEGER DEFAULT 0,
+    paused INTEGER DEFAULT 0,
+    meta TEXT
+  );
+
+  -- One row per content × platform delivery attempt (the honest ledger).
+  CREATE TABLE IF NOT EXISTS dist_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_type TEXT,
+    content_url TEXT,
+    title TEXT,
+    platform_slug TEXT,
+    status TEXT,
+    http_status INTEGER,
+    detail_url TEXT,
+    message TEXT,
+    attempted_at INTEGER,
+    retry_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_dist_log_url ON dist_log(content_url);
+  CREATE INDEX IF NOT EXISTS idx_dist_log_platform ON dist_log(platform_slug);
+  CREATE INDEX IF NOT EXISTS idx_dist_log_attempt ON dist_log(attempted_at);
+
+  -- Human-in-the-loop onboarding queue (manual signup / verification / approval).
+  CREATE TABLE IF NOT EXISTS dist_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform_slug TEXT,
+    action TEXT,
+    status TEXT DEFAULT 'open',
+    guidance TEXT,
+    submit_url TEXT,
+    created_at INTEGER,
+    done_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_dist_tasks_status ON dist_tasks(status);
   `;
 
   db.run(schema);
@@ -321,6 +544,37 @@ async function initialize() {
   if (!shopCols.has('prev_price')) db.run('ALTER TABLE shop_products ADD COLUMN prev_price REAL');
   if (!shopCols.has('restock_at')) db.run('ALTER TABLE shop_products ADD COLUMN restock_at INTEGER');
   if (!shopCols.has('price_changed_at')) db.run('ALTER TABLE shop_products ADD COLUMN price_changed_at INTEGER');
+
+  // Rich location + media columns so every listing carries its own accurate
+  // location and real media inside the local DB (reduces external lookups).
+  const richCols = [
+    ['country_code', 'TEXT'], ['state', 'TEXT'], ['city', 'TEXT'], ['town', 'TEXT'],
+    ['village', 'TEXT'], ['district', 'TEXT'], ['neighborhood', 'TEXT'],
+    ['street', 'TEXT'], ['house_number', 'TEXT'], ['postal_code', 'TEXT'],
+    ['landmark', 'TEXT'], ['lat', 'REAL'], ['lng', 'REAL'],
+    ['video', 'TEXT'], ['images', 'TEXT'], ['bedrooms', 'TEXT'], ['bathrooms', 'TEXT'],
+    ['building_size', 'TEXT'], ['land_size', 'TEXT'], ['parking_spaces', 'TEXT'],
+    ['features', 'TEXT'], ['listing_condition', 'TEXT'], ['listing_status', 'TEXT'],
+    ['listing_type', 'TEXT'], ['location_verified', 'INTEGER DEFAULT 0'],
+    ['coordinates_verified', 'INTEGER DEFAULT 0']
+  ];
+  const has = new Set(shopCols);
+  for (const [col, typ] of richCols) {
+    if (!has.has(col)) {
+      try { db.run('ALTER TABLE shop_products ADD COLUMN ' + col + ' ' + typ); } catch (e) { /* already added concurrently */ }
+    }
+  }
+
+  // Seed the geo location database with real data for every supported country.
+  try {
+    const { seedGeoLocations } = require('./geo-seed');
+    const s = seedGeoLocations();
+    if (s && s.inserted) {
+      console.log('Geo locations seeded: ' + s.inserted + ' new locations.');
+    }
+  } catch (e) {
+    console.log('Geo seed note: ' + (e && e.message ? e.message : 'skipped'));
+  }
 
   persist();
 }

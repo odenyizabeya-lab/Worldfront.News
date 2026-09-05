@@ -1,18 +1,21 @@
 // Vercel self-redeploy helper.
 //
-// The project is deployed with the Vercel CLI (no Git repository is connected),
-// so Vercel Deploy Hooks and Git-triggered rebuilds are not available. Instead,
-// the daily cron hits /api/cron/shop-redeploy, which calls the official Vercel
-// REST API to REBUILD the latest production deployment. The rebuild re-runs the
-// build pipeline (npm install → postinstall → build) on the same file tree, so
-// build-regenerate.js produces a fresh bundled DB with the current day's
-// editions, making them durable across cold starts.
+// Two ways to rebuild production:
+//   1. DEPLOY_HOOK_URL — a Vercel Deploy Hook (public URL, no token). POSTing to
+//      it rebuilds the latest production deployment on the same file tree, so
+//      the build pipeline re-generates the bundled DB (build-regenerate.js) with
+//      that day's complete editions. Preferred: works even if access tokens are
+//      revoked or missing.
+//   2. DEPLOY_TOKEN fallback — the official Vercel REST API path, kept as a
+//      fallback for when no hook is configured.
 //
-// Requires the env var DEPLOY_TOKEN (a Vercel access token) to be set on the
-// project. Guarded by a 12h cooldown so cron retries never double-trigger.
+// Rebuilds are guarded by a cooldown (12h for redeployProduction, 45min for the
+// hourly rebuildNow) so retried crons never double-trigger. Rebuilds never
+// delete anything — the running deploy stays live, and on failure the previous
+// production deployment remains untouched.
 const API = 'https://api.vercel.com';
-const TEAM = 'odenyizabeya-lab';
-const PROJECT_ID = 'prj_OEn517xXnH1z05Aj0sdpAcLpKqA7';
+const TEAM = process.env.DEPLOY_TEAM || 'odenyizabeya-lab';
+const PROJECT_ID = process.env.DEPLOY_PROJECT_ID || 'prj_OEn517xXnH1z05Aj0sdpAcLpKqA7';
 const COOLDOWN_S = 12 * 3600;
 
 const db = require('../db');
@@ -32,9 +35,33 @@ async function vercelApi(path, options = {}) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data && data.error ? data.error.message : JSON.stringify(data).slice(0, 200);
-    throw new Error('Vercel API ' + res.status + ': ' + msg);
+    throw new Error(
+      'Vercel API ' + res.status + ': ' + msg +
+      ' — the DEPLOY_TOKEN env var on the Vercel project is missing or was revoked/expired. ' +
+      'Fix: set a valid token as DEPLOY_TOKEN, or (preferred) set DEPLOY_HOOK_URL to a Vercel Deploy Hook URL so some rebuilds need no token at all.'
+    );
   }
   return data;
+}
+
+// Trigger a production rebuild via a Vercel Deploy Hook (public URL, no token
+// needed). Deploy Hooks re-deploy the latest production deployment on the same
+// file tree, which is exactly what the API-based rebuild does — minus any
+// credential dependency. Returns null when DEPLOY_HOOK_URL is not configured so
+// callers can fall back to the API path.
+async function triggerHook() {
+  const hook = process.env.DEPLOY_HOOK_URL;
+  if (!hook) return null;
+  const res = await fetch(hook, {
+    method: 'POST',
+    signal: AbortSignal.timeout(90000)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data && data.error ? data.error.message : JSON.stringify(data).slice(0, 200);
+    throw new Error('Deploy Hook HTTP ' + res.status + ': ' + msg);
+  }
+  return { id: data.id || data.deploymentId || '', job: data.job || '', url: data.url || '' };
 }
 
 // Trigger a rebuild of the most recent production deployment.
@@ -57,6 +84,13 @@ async function redeployProduction() {
   );
   if (!todayEditions || todayEditions.n === 0) {
     return { skipped: true, reason: 'no editions published for today yet', last_redeploy: lastTs };
+  }
+
+  const hook = await triggerHook();
+  if (hook) {
+    db.run("INSERT OR REPLACE INTO settings (key,value) VALUES ('last_shop_redeploy',?)", [String(db.now())]);
+    db.persist();
+    return { redeployed: true, via: 'deploy-hook', id: hook.id, job: hook.job, url: hook.url || '' };
   }
 
   const list = await vercelApi(`/v6/deployments?projectId=${PROJECT_ID}&target=production&state=READY&limit=1&teamId=${TEAM}`);
@@ -91,6 +125,13 @@ async function rebuildNow() {
   const lastTs = last ? parseInt(last.value, 10) || 0 : 0;
   if (lastTs && (db.now() - lastTs) < 45 * 60) {
     return { skipped: true, last_rebuild: lastTs };
+  }
+
+  const hook = await triggerHook();
+  if (hook) {
+    db.run("INSERT OR REPLACE INTO settings (key,value) VALUES ('last_shop_rebuild',?)", [String(db.now())]);
+    db.persist();
+    return { rebuilt: true, via: 'deploy-hook', id: hook.id, job: hook.job, url: hook.url || '' };
   }
 
   const list = await vercelApi(`/v6/deployments?projectId=${PROJECT_ID}&target=production&state=READY&limit=1&teamId=${TEAM}`);

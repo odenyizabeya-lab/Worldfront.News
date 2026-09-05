@@ -15,6 +15,24 @@ window.WF = (function () {
   return { state };
 })();
 
+// ---- Media helpers (img ↔ video) ----
+function isVideoUrl(u) {
+  return /\.(mp4|webm|ogv|mov|m4v|mpg|mpeg)(\?|$)/i.test(String(u || ''));
+}
+
+// Returns markup for the article/post cover: a muted autoplaying <video> with
+// controls when the media is a real video file (house/car walkthroughs), else a
+// lazy <img>. cls = extra class list, alt = fallback text.
+function mediaTag(src, cls, alt) {
+  const s = String(src || '');
+  if (!s) return '';
+  const c = cls ? ' class="' + cls + '"' : '';
+  if (isVideoUrl(s)) {
+    return '<video' + c + ' src="' + esc(s) + '" autoplay muted loop playsinline controls preload="metadata" onerror="this.style.display=\'none\'"></video>';
+  }
+  return '<img' + c + ' loading="lazy" src="' + esc(s) + '" alt="' + esc(alt || '') + '" />';
+}
+
 // ---- API helper ----
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -109,14 +127,16 @@ function catEmoji(cat) {
 function articleCard(a, opts) {
   const b = a.breaking ? '<span class="breaking-tag">BREAKING</span>' : '';
   const cat = a.category ? '<span class="cat-tag">' + esc(a.category) + '</span>' : '';
-  const href = '#/article/' + esc(a.slug || a.id);
+  const href = '/article/' + esc(a.slug || a.id);
   let thumb;
   if (a.image) {
-    // Real story image - never a blank box: swap in a branded fallback on error
+    // Real story media - never a blank box: swap in a branded fallback on error
     const fbk = '<span class="thumb-fallback" style="background:' + catGrad(a.category) + '"><span class="thumb-fb-icon">' + catEmoji(a.category) + '</span><span class="thumb-fb-label">' + esc(a.category || 'News') + '</span></span>';
     thumb = '<a class="thumb" href="' + href + '">' +
-      '<img loading="lazy" src="' + esc(a.image) + '" alt="' + esc(a.title) + '"' +
-      ' onerror="this.remove(); this.parentElement.insertAdjacentHTML(\'beforeend\',' + JSON.stringify(fbk) + ');">' +
+      (isVideoUrl(a.image)
+        ? '<video class="thumb-video" src="' + esc(a.image) + '" autoplay muted loop playsinline preload="metadata" onerror="this.remove(); this.parentElement.insertAdjacentHTML(\'beforeend\',' + JSON.stringify(fbk) + ');"></video>'
+        : '<img loading="lazy" src="' + esc(a.image) + '" alt="' + esc(a.title) + '"' +
+          ' onerror="this.remove(); this.parentElement.insertAdjacentHTML(\'beforeend\',' + JSON.stringify(fbk) + ');">') +
       cat + b + '</a>';
     // Elevate any real-image cards only via CSS; the img handles itself
   } else {
@@ -142,7 +162,7 @@ function esc(s) {
 
 // ---- Share ----
 async function shareArticle(a) {
-  const data = { title: a.title, url: location.origin + '/#/article/' + (a.slug || a.id) };
+  const data = { title: a.title, url: location.origin + '/article/' + (a.slug || a.id) };
   if (navigator.share) { try { await navigator.share(data); return; } catch (e) {} }
   if (navigator.clipboard) { await navigator.clipboard.writeText(data.url); toast('Link copied'); }
 }
@@ -232,7 +252,7 @@ async function onSearchInput() {
   try {
     const d = await api('/search?q=' + encodeURIComponent(q));
     box.innerHTML = d.results.length
-      ? d.results.slice(0, 8).map(r => '<a class="sr-item" href="#/article/' + esc(r.slug || r.id) + '" onclick="WF.closeSearch()">' +
+      ? d.results.slice(0, 8).map(r => '<a class="sr-item" href="/article/' + esc(r.slug || r.id) + '" onclick="WF.closeSearch()">' +
           (r.image ? '<img src="' + esc(r.image) + '" onerror="this.style.display=\'none\'">' : '') +
           '<div><div class="sr-title">' + esc(r.title) + '</div><div class="sr-meta">' + esc(r.source_name) + ' · ' + timeAgo(r.published_at) + '</div></div></a>').join('')
       : '<div class="sr-item muted">No results for "' + esc(q) + '"</div>';
@@ -537,6 +557,8 @@ window.WF.countryMap = WF.state.countryMap;
 window.WF.timeAgo = timeAgo;
 window.WF.fmtDate = fmtDate;
 window.WF.esc = esc;
+window.WF.isVideoUrl = isVideoUrl;
+window.WF.mediaTag = mediaTag;
 window.WF.shareArticle = shareArticle;
 window.WF.openSearch = openSearch;
 window.WF.closeSearch = closeSearchComp;

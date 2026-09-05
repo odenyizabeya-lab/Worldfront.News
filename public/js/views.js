@@ -48,7 +48,7 @@ async function renderList(app, { title, desc, qs, subtitle, count }) {
 // ---------- Home ----------
 WF.views.home = async function (app) {
   setMeta('Global News Platform', 'Trusted news from every country in the world — browse by country, region and category.');
-  app.innerHTML = '<div class="section-head"><h2>🌍 Top Stories</h2></div>' + skeletonGrid(3) + '<div class="spacer"></div><div id="latestSec"><div class="section-head"><h2>🕒 Latest News</h2><a class="see-all" href="#/latest">See all</a></div>' + skeletonGrid(6) + '</div>';
+  app.innerHTML = '<div class="section-head"><h2>🌍 Top Stories</h2></div>' + skeletonGrid(3) + '<div class="spacer"></div><div id="latestSec"><div class="section-head"><h2>🕒 Latest News</h2><a class="see-all" href="/latest">See all</a></div>' + skeletonGrid(6) + '</div>';
 
   // Featured hero
   try {
@@ -85,15 +85,15 @@ WF.views.home = async function (app) {
 };
 
 function renderHero(a) {
-  const img = a.image ? '<img src="' + WF.esc(a.image) + '" alt="' + WF.esc(a.title) + '" onerror="this.parentElement.parentElement.style.background=\'var(--surface-2)\'">' : '';
-  return '<div class="hero"><div class="hero-img">' + img + '</div><a class="hero-body" href="#/article/' + WF.esc(a.slug || a.id) + '">' +
+  const img = a.image ? WF.mediaTag(a.image, '', a.title) : '';
+  return '<div class="hero"><div class="hero-img">' + img + '</div><a class="hero-body" href="/article/' + WF.esc(a.slug || a.id) + '">' +
     '<span class="cat-tag">' + WF.esc(a.category || 'world') + '</span>' +
     '<h2>' + WF.esc(a.title) + '</h2><p>' + WF.esc(a.summary) + '</p>' +
     '<div class="meta">' + WF.esc(a.source_name) + ' · ' + WF.timeAgo(a.published_at) + '</div></a></div>';
 }
 
 function emptyState() {
-  return '<div class="center" style="padding:40px"><h3>Welcome to WorldFront.News</h3><p class="muted">Real headlines from around the world are being collected now. Please check back in a few minutes, or try the World map below.</p><br><a class="btn btn-primary" href="#/world">Browse by country</a></div>';
+  return '<div class="center" style="padding:40px"><h3>Welcome to WorldFront.News</h3><p class="muted">Real headlines from around the world are being collected now. Please check back in a few minutes, or try the World map below.</p><br><a class="btn btn-primary" href="/world">Browse by country</a></div>';
 }
 
 async function appendCategorySections(app) {
@@ -102,7 +102,7 @@ async function appendCategorySections(app) {
     const active = (cats.categories || []).filter(c => c.slug !== 'world' && c.slug !== 'breaking').slice(0, 8);
     for (const c of active) {
       const sec = document.createElement('div');
-      sec.innerHTML = '<div class="section-head"><h2>' + c.icon + ' ' + WF.esc(c.name) + '</h2><a class="see-all" href="#/category/' + c.slug + '">See all</a></div><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">' + skeletonGrid(4) + '</div>';
+      sec.innerHTML = '<div class="section-head"><h2>' + c.icon + ' ' + WF.esc(c.name) + '</h2><a class="see-all" href="/category/' + c.slug + '">See all</a></div><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">' + skeletonGrid(4) + '</div>';
       app.appendChild(sec);
       loadCategoryInto(sec.querySelector('.grid'), c.slug);
     }
@@ -152,7 +152,7 @@ WF.views.world = async function (app) {
     for (const r of regs) {
       const list = d.grouped[r];
       html += '<div class="region-block" style="margin-bottom:26px"><h3>' + WF.esc(r) + ' <span class="muted" style="font-weight:400;font-size:.9rem">(' + list.length + ')</span></h3>' +
-        '<div class="country-links">' + list.map(c => '<a href="#/country/' + c.code + '">' + WF.esc(c.name) + '</a>').join('') + '</div></div>';
+        '<div class="country-links">' + list.map(c => '<a href="/country/' + c.code + '">' + WF.esc(c.name) + '</a>').join('') + '</div></div>';
     }
     box.innerHTML = html || '<p class="muted">Loading countries…</p>';
   } catch (e) { box.innerHTML = '<p class="muted">Could not load regions.</p>'; }
@@ -174,7 +174,7 @@ WF.views.country = async function (app, params) {
     const d = await WF.api('/articles?country=' + code + '&limit=24');
     grid.innerHTML = d.articles.length
       ? '<div class="grid">' + d.articles.map(a => WF.articleCard(a)).join('') + '</div>'
-      : '<div class="center" style="padding:30px"><p class="muted">No stories for ' + WF.esc(name) + ' yet. The news engine is collecting real headlines from every country — check back soon.</p><a class="btn btn-primary" href="#/world">Find another country</a></div>';
+      : '<div class="center" style="padding:30px"><p class="muted">No stories for ' + WF.esc(name) + ' yet. The news engine is collecting real headlines from every country — check back soon.</p><a class="btn btn-primary" href="/world">Find another country</a></div>';
   } catch (e) { grid.innerHTML = '<p class="muted">Could not load stories.</p>'; }
 };
 
@@ -277,7 +277,7 @@ WF.views.article = async function (app, params) {
     }
 
     const isShop = a.category === 'shopping' || (a.guid && String(a.guid).indexOf('shop:') === 0);
-    const img = a.image ? '<img class="article-hero-img' + (isShop ? ' is-product' : '') + '" src="' + WF.esc(a.image) + '" alt="' + WF.esc(a.title) + '" onerror="this.style.display=\'none\'">' : '';
+    const img = a.image ? WF.mediaTag(a.image, 'article-hero-img' + (isShop ? ' is-product' : ''), a.title) : '';
     const flag = a.country_code ? WF.countryName(a.country_code) : '';
     const actionLabel = isShop ? 'View product on Weverse ↗' : 'Read original article ↗';
     const sourceNote = isShop
@@ -328,6 +328,8 @@ WF.views.article = async function (app, params) {
 function dailyItemCard(it, index) {
   const px = it.price ? it.currency + ' ' + Number(it.price).toLocaleString(undefined, { maximumFractionDigits: 2 }) : 'Price on request';
   const title = WF.esc(it.title || 'Product');
+  const bid = it.property_id || (it.product_url ? it.product_url.split('id=')[1] : null) || it.listing_id;
+  const internal = '/shop/product/' + WF.esc(bid);
   const url = WF.esc(it.product_url || '#');
   const img = it.image
     ? '<img loading="lazy" src="' + WF.esc(it.image) + '" alt="' + title + '" onerror="this.style.display=\'none\'">'
@@ -335,18 +337,19 @@ function dailyItemCard(it, index) {
   const note = it.item_text || '';
   const badge = it.featured ? '<span class="pill featured-pill">★ Featured today</span>' : '<span class="pill">#' + (index + 1) + ' of today\'s selection</span>';
   return '<article class="article-card product-card' + (it.featured ? ' featured-card' : '') + '">' +
-    '<a class="thumb product-thumb" href="' + url + '" title="' + title + '" target="_blank" rel="noopener noreferrer nofollow">' +
+    '<a class="thumb product-thumb" href="' + internal + '" title="' + title + '">' +
       (img || '<span class="thumb-fallback" style="background:linear-gradient(135deg,#7a1f8c,#c026d3)"><span class="thumb-fb-icon">🛍️</span><span class="thumb-fb-label">Weverse Shop</span></span>') +
       '<span class="cat-tag">' + WF.esc(it.category || 'shopping') + '</span>' +
       (it.featured ? '<span class="featured-ribbon">★ Featured</span>' : '') +
     '</a>' +
     '<div class="card-body">' +
       '<div class="card-meta">' + badge + '</div>' +
-      '<h3><a href="' + url + '" target="_blank" rel="noopener noreferrer nofollow">' + title + '</a></h3>' +
+      '<h3><a href="' + internal + '">' + title + '</a></h3>' +
       (note ? '<p class="card-summary">' + WF.esc(note.slice(0, 200)) + '</p>' : '') +
       '<div class="card-meta"><span class="src">' + (it.brand ? WF.esc(it.brand) : 'Weverse Shop') + '</span>' +
         '<span>·</span><span class="product-price">' + WF.esc(px) + '</span></div>' +
-      '<a class="btn btn-primary btn-sm btn-block buy-btn" href="' + url + '" target="_blank" rel="noopener noreferrer nofollow">View product on Weverse ↗</a>' +
+      '<a class="btn btn-primary btn-sm btn-block buy-btn" href="' + internal + '">View product</a>' +
+      '<a class="btn btn-outline btn-sm btn-block buy-btn" href="' + url + '" target="_blank" rel="noopener noreferrer nofollow">View on Weverse ↗</a>' +
     '</div></article>';
 }
 
@@ -369,7 +372,7 @@ async function renderDailyEdition(app, a, d) {
 
   const hero = featured
     ? '<div class="daily-hero">' +
-        (featured.image ? '<img class="article-hero-img is-product" src="' + WF.esc(featured.image) + '" alt="' + WF.esc(featured.title) + '" onerror="this.style.display=\'none\'">' : '') +
+        (featured.image ? WF.mediaTag(featured.image, 'article-hero-img is-product', featured.title) : '') +
         '<span class="featured-ribbon">★ Today\'s featured product</span>' +
       '</div>'
     : '';
@@ -437,10 +440,10 @@ function updateSEOTags(a) {
   og.setAttribute('content', a.title);
   let img = document.querySelector('meta[property="og:image"]');
   if (!img) { img = document.createElement('meta'); img.setAttribute('property', 'og:image'); document.head.appendChild(img); }
-  img.setAttribute('content', a.image || 'https://worldfront.news/icons/icon-512.png');
+  img.setAttribute('content', a.image && !WF.isVideoUrl(a.image) ? a.image : location.origin + '/icons/icon-512.png');
   let ogurl = document.querySelector('meta[property="og:url"]');
   if (!ogurl) { ogurl = document.createElement('meta'); ogurl.setAttribute('property', 'og:url'); document.head.appendChild(ogurl); }
-  ogurl.setAttribute('content', location.origin + '/#/article/' + a.slug);
+  ogurl.setAttribute('content', location.origin + '/article/' + a.slug);
 
   // JSON-LD NewsArticle
   let j = document.getElementById('jsonld-news');
@@ -449,11 +452,11 @@ function updateSEOTags(a) {
     '@context': 'https://schema.org',
     '@type': 'NewsArticle',
     headline: a.title,
-    image: a.image ? [a.image] : undefined,
+    image: a.image && !WF.isVideoUrl(a.image) ? [a.image] : undefined,
     datePublished: new Date(a.published_at * 1000).toISOString(),
     author: a.author ? { '@type': 'Person', name: a.author } : { '@type': 'Organization', name: 'WorldFront.News' },
-    publisher: { '@type': 'Organization', name: 'WorldFront.News', logo: { '@type': 'ImageObject', url: 'https://worldfront.news/icons/icon-192.png' } },
-    mainEntityOfPage: { '@type': 'WebPage', '@id': location.origin + '/#/article/' + a.slug },
+    publisher: { '@type': 'Organization', name: 'WorldFront.News', logo: { '@type': 'ImageObject', url: location.origin + '/icons/icon-192.png' } },
+    mainEntityOfPage: { '@type': 'WebPage', '@id': location.origin + '/article/' + a.slug },
     description: (a.summary || '').slice(0, 160)
   });
 }
@@ -465,6 +468,62 @@ async function saveArticle(a) {
     WF.toast('Saved to your reading list ✓');
   } catch (e) { WF.toast(e.message); }
 }
+
+// ---------- Product page (client view; SSR serves the same page) ----------
+WF.views.product = async function (app, params) {
+  app.innerHTML = '<div class="article-page"><div class="skeleton" style="height:24px;width:70%"></div><div class="skeleton" style="height:200px;margin:16px 0"></div></div>';
+  try {
+    const d = await WF.api('/shop/product/' + encodeURIComponent(params.id));
+    const p = d.product;
+    setMeta(p.title, (p.description || '').slice(0, 160));
+    const px = p.price ? p.currency + ' ' + Number(p.price).toLocaleString(undefined, { maximumFractionDigits: 2 }) : 'Price on request';
+    app.innerHTML =
+      '<article class="article-page">' +
+      '<span class="cat-tag">' + WF.esc(p.category || 'shopping') + '</span>' +
+      '<h1>' + WF.esc(p.title) + '</h1>' +
+      '<div class="article-meta"><span class="src">' + WF.esc(p.brand || 'Weverse Online Shop') + '</span></div>' +
+      (p.thumbnail ? WF.mediaTag(p.thumbnail, 'article-hero-img is-product', p.title) : '') +
+      '<p class="product-price" style="font-size:1.6rem;font-weight:700">' + WF.esc(px) + '</p>' +
+      (p.description ? '<p class="article-summary">' + WF.esc(p.description) + '</p>' : '') +
+      '<div class="article-actions">' +
+        '<a class="btn btn-primary" href="' + WF.esc(p.product_url || '#') + '" target="_blank" rel="noopener noreferrer nofollow">View and buy on Weverse ↗</a>' +
+        '<a class="btn btn-outline" href="/shop">Browse all products</a>' +
+      '</div></article>';
+  } catch (e) {
+    app.innerHTML = '<div class="center" style="padding:40px"><h3>Product not found</h3><p class="muted">' + WF.esc(e.message) + '</p><br><a class="btn btn-primary" href="/shop">Back to shop</a></div>';
+  }
+};
+
+// ---------- Daily edition page (client view; SSR serves the same page) ----------
+WF.views.shopDaily = async function (app, params) {
+  app.innerHTML = '<div class="article-page"><div class="skeleton" style="height:24px;width:70%"></div><div class="skeleton" style="height:200px;margin:16px 0"></div></div>';
+  try {
+    const api = '/shop/daily' + (params.date ? '?country=' + encodeURIComponent(params.country) + '&date=' + encodeURIComponent(params.date) : '/' + encodeURIComponent(params.country));
+    const data = (await WF.api(api)).edition;
+    const featured = data.items.find(i => i.featured) || null;
+    setMeta(data.headline, (data.intro || '').slice(0, 160));
+    const hero = featured
+      ? '<div class="daily-hero">' + (featured.image ? WF.mediaTag(featured.image, 'article-hero-img is-product', featured.title) : '') +
+        '<span class="featured-ribbon">★ Today\'s featured product</span></div>'
+      : '';
+    const countryName = WF.countryName(params.country) || params.country;
+    app.innerHTML =
+      '<article class="article-page">' +
+      '<span class="cat-tag">shopping</span> <span class="pill">Daily product update</span>' +
+      '<h1>' + WF.esc(data.headline) + '</h1>' +
+      '<div class="article-meta"><span class="src">Weverse Online Shop</span><span>' + WF.esc(params.date || '') + '</span><span>' + WF.esc(countryName) + '</span></div>' +
+      hero + (data.intro ? '<p class="article-summary">' + WF.esc(data.intro) + '</p>' : '') +
+      '<div class="daily-products">' + (data.items.length ? '<div class="grid">' + data.items.map((it, i) => dailyItemCard(it, i)).join('') + '</div>' : '<p class="muted">No products in this edition.</p>') + '</div>' +
+      (data.closing ? '<p class="article-summary" style="margin-top:24px">' + WF.esc(data.closing) + '</p>' : '') +
+      '</article>';
+    const rel = document.createElement('div');
+    rel.className = 'related';
+    rel.innerHTML = '<h3>Related</h3><p class="muted"><a href="/shop">Browse all shop products →</a></p>';
+    app.appendChild(rel);
+  } catch (e) {
+    app.innerHTML = '<div class="center" style="padding:40px"><h3>Edition not found</h3><p class="muted">No daily edition is published for that selection yet.</p><br><a class="btn btn-primary" href="/shop">Back to shop</a></div>';
+  }
+};
 
 // ---------- Search ----------
 WF.views.search = async function (app, params) {
@@ -522,7 +581,7 @@ WF.views.account = async function (app) {
     '<div class="card" style="margin-top:16px"><h3>Following</h3>' +
     '<div id="followChips" class="chip-row"></div></div>' +
     '<div class="card" style="margin-top:16px"><h3>Saved articles (' + saved.length + ')</h3><div id="savedList"></div></div>' +
-    (u.role === 'admin' ? '<div class="card" style="margin-top:16px"><h3>Admin</h3><a class="btn btn-outline btn-block" href="#/admin">Open Admin Dashboard</a></div>' : '') +
+    (u.role === 'admin' ? '<div class="card" style="margin-top:16px"><h3>Admin</h3><a class="btn btn-outline btn-block" href="/admin">Open Admin Dashboard</a></div>' : '') +
     '</div>';
 
   document.getElementById('logoutBtn').addEventListener('click', signOut);
@@ -547,7 +606,7 @@ WF.views.account = async function (app) {
 
   const sl = document.getElementById('savedList');
   sl.innerHTML = saved.length
-    ? saved.map(a => '<div class="list-item"><a href="#/article/' + WF.esc(a.slug || a.id) + '">' + (a.image ? '<img src="' + WF.esc(a.image) + '" onerror="this.style.display=\'none\'">' : '') + '</a><div><a href="#/article/' + WF.esc(a.slug || a.id) + '"><strong>' + WF.esc(a.title) + '</strong></a><div class="muted" style="font-size:.78rem">' + WF.esc(a.source_name) + '</div></div></div>').join('')
+    ? saved.map(a => '<div class="list-item"><a href="/article/' + WF.esc(a.slug || a.id) + '">' + (a.image ? '<img src="' + WF.esc(a.image) + '" onerror="this.style.display=\'none\'">' : '') + '</a><div><a href="/article/' + WF.esc(a.slug || a.id) + '"><strong>' + WF.esc(a.title) + '</strong></a><div class="muted" style="font-size:.78rem">' + WF.esc(a.source_name) + '</div></div></div>').join('')
     : '<p class="muted">No saved articles yet.</p>';
 };
 
@@ -595,7 +654,7 @@ WF.views.sitearticle = async function (app, params) {
       (a.category ? '<span class="cat-tag">' + WF.esc(a.category) + '</span>' : '') +
       '<h1>' + WF.esc(a.title) + '</h1>' +
       '<div class="article-meta"><span class="src">' + WF.esc(a.author || 'WorldFront.News') + '</span><span>' + WF.fmtDate(a.published_at) + '</span></div>' +
-      (a.image ? '<img class="article-hero-img" src="' + WF.esc(a.image) + '" onerror="this.style.display=\'none\'">' : '') +
+      (a.image ? WF.mediaTag(a.image, 'article-hero-img', a.title) : '') +
       '<div style="font-size:1.05rem;line-height:1.7">' + a.body + '</div>' +
       '</article>';
   } catch (e) {
@@ -630,20 +689,23 @@ WF.views.terms = async function (app) {
 function productCard(p) {
   const px = p.price ? p.currency + ' ' + Number(p.price).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '';
   const title = WF.esc(p.title);
+  const internal = '/shop/product/' + WF.esc(p.property_id || p.listing_id);
   const url = WF.esc(p.product_url);
   const fallback = '<span class="thumb-fallback" style="background:linear-gradient(135deg,#7a1f8c,#c026d3)"><span class="thumb-fb-icon">🛍️</span><span class="thumb-fb-label">Weverse Shop</span></span>';
   const img = p.thumbnail
     ? '<img loading="lazy" src="' + WF.esc(p.thumbnail) + '" alt="' + title + '" onerror="this.remove(); this.parentElement.insertAdjacentHTML(\'beforeend\',' + JSON.stringify(fallback) + ');">'
     : fallback;
   return '<article class="article-card product-card">' +
-    '<a class="thumb" href="' + url + '" title="' + title + '" target="_blank" rel="noopener noreferrer nofollow">' + img +
+    '<a class="thumb" href="' + internal + '" title="' + title + '">' + img +
       '<span class="cat-tag">' + WF.esc(p.category) + '</span></a>' +
     '<div class="card-body">' +
-      '<h3><a href="' + url + '" target="_blank" rel="noopener noreferrer nofollow">' + title + '</a></h3>' +
+      '<h3><a href="' + internal + '">' + title + '</a></h3>' +
       '<p class="card-summary">' + WF.esc((p.description || '').slice(0, 130)) + '</p>' +
       '<div class="card-meta"><span class="src">' + (p.brand ? WF.esc(p.brand) : 'Weverse Shop') + '</span>' +
+        (p.display_location ? '<span>·</span><span class="product-location">📍 ' + WF.esc(p.display_location) + '</span>' : '') +
         (px ? '<span>·</span><span class="product-price">' + WF.esc(px) + '</span>' : '') + '</div>' +
-      '<a class="btn btn-primary btn-sm btn-block buy-btn" href="' + url + '" target="_blank" rel="noopener noreferrer nofollow">View & Buy ↗</a>' +
+      '<a class="btn btn-primary btn-sm btn-block buy-btn" href="' + internal + '">View product</a>' +
+      '<a class="btn btn-outline btn-sm btn-block buy-btn" href="' + url + '" target="_blank" rel="noopener noreferrer nofollow">View & Buy on Weverse ↗</a>' +
     '</div></article>';
 }
 
@@ -717,7 +779,7 @@ async function appendShopUpdates(app) {
     if (!d.products || !d.products.length) return;
     const sec = document.createElement('div');
     sec.innerHTML =
-      '<div class="section-head"><h2>🛍️ Weverse Shop Updates</h2><a class="see-all" href="#/shop">See all</a></div>' +
+      '<div class="section-head"><h2>🛍️ Weverse Shop Updates</h2><a class="see-all" href="/shop">See all</a></div>' +
       '<p class="muted" style="font-size:.85rem;margin:-6px 0 12px">New products published automatically from Weverse Online Shop. Prices and availability shown on the shop.</p>' +
       '<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">' + d.products.map(productCard).join('') + '</div>';
     app.appendChild(sec);

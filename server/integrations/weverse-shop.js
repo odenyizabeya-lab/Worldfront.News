@@ -118,8 +118,121 @@ async function sync() {
     db.run('UPDATE shop_products SET published=0 WHERE listing_id NOT IN (' + placeholders + ') AND published=1', seen);
   }
   db.run("INSERT OR REPLACE INTO settings (key,value) VALUES ('last_shop_sync',?)", [String(nowTs)]);
+  // Enrich every listing with its real location + media/specs from the showroom.
+  // Failures never break the sync — the catalog itself is always stored.
+  const enrich = await enrichFromShowroom().catch((e) => ({ error: String((e && e.message) || e) }));
   db.persist();
-  return { total: rows.length, inserted, updated, last_sync: nowTs };
+  return { total: rows.length, inserted, updated, last_sync: nowTs, enrich };
+}
+
+// Pulls the rich showroom records (real address, coordinates, media, specs,
+// status) for every synced listing and stores them locally in both
+// property_details (single source of truth) and the shop_products columns, so
+// images, videos, locations and JSON-LD always reflect the real listing.
+// Only real fields are stored; junk/unverifiable values are dropped.
+const LISTING_IMAGE_KIND = /image\//i;
+function isRealMediaUrl(u) {
+  return /\.(jpg|jpeg|png|webp|avif|gif|mp4|webm|ogv|mov|m4v|mpg|mpeg)(\?|#|$)/i.test(String(u || ''));
+}
+async function enrichFromShowroom() {
+  await db.ready();
+  let showroomMap = new Map();
+  try {
+    showroomMap = await fetchShowroomListings();
+  } catch (e) {
+    return { error: 'showroom fetch failed', message: String((e && e.message) || e), enriched: 0 };
+  }
+  const products = db.all('SELECT listing_id, property_id FROM shop_products WHERE published=1');
+  let enriched = 0;
+
+  for (const p of products) {
+    const pid = p.property_id ? String(p.property_id) : '';
+    const row = pid ? showroomMap.get(pid) : null;
+    if (!row) continue;
+
+    const clean = (v) => /^(not specified|none|n\/a|—|-|,$|worldwide|null|undefined)?$/i.test(String(v || '').trim()) ? '' : String(v).trim();
+
+    const images = Array.isArray(row.images)
+      ? row.images.map(absMedia).filter((u) => u && hasMediaExt(u)).slice(0, 20)
+      : [];
+    const video = firstVideoMedia(row) || '';
+    const primaryImg = firstImageMedia(row, p.thumbnail || '');
+    const thumbnail = primaryImg || p.thumbnail || '';
+
+    const lat = typeof row.lat === 'number' && isFinite(row.lat) ? row.lat : null;
+    const lng = typeof row.lng === 'number' && isFinite(row.lng) ? row.lng : null;
+    const cc = clean(row.country_code) ? String(row.country_code).toUpperCase() : '';
+    const ccValid = cc ? db.get('SELECT code FROM countries WHERE code=?', [cc]) : null;
+    const countryCol = ccValid ? cc : '';
+
+    const features = Array.isArray(row.features) ? row.features.filter(clean).slice(0, 20) : [];
+
+    db.run(
+      `UPDATE shop_products SET
+         country_code=?, state=?, city=?, town=?, village=?, district=?, neighborhood=?,
+         street=?, house_number=?, postal_code=?, landmark=?, lat=?, lng=?,
+         video=?, images=?, bedrooms=?, bathrooms=?, building_size=?, land_size=?,
+         parking_spaces=?, features=?, listing_condition=?, listing_status=?, listing_type=?,
+         location_verified=?, coordinates_verified=?, thumbnail=?
+       WHERE listing_id=?`,
+      [countryCol, clean(row.state), clean(row.city), clean(row.town), clean(row.village),
+       clean(row.district), clean(row.neighborhood), clean(row.street), clean(row.house_number),
+       clean(row.postal_code), clean(row.landmark), lat, lng,
+       video, JSON.stringify(images), clean(row.bedrooms), clean(row.bathrooms),
+       clean(row.building_size), clean(row.land_size), clean(row.parking_spaces),
+       JSON.stringify(features), clean(row.condition), clean(row.listing_status),
+       clean(row.listing_type), lat != null && lng != null ? 1 : 0,
+       lat != null && lng != null ? 1 : 0, thumbnail, p.listing_id]
+    );
+
+    // Single source of truth record for property pages/JSON-LD.
+    db.run(
+      `INSERT INTO property_details
+       (property_id,listing_id,listing_type,category,subcategory,title,description,price,currency,
+        country,country_code,state,city,town,village,district,neighborhood,street,house_number,
+        postal_code,landmark,lat,lng,video,video_url,images,bedrooms,bathrooms,building_size,
+        land_size,parking_spaces,features,condition,listing_status,coordinates_verified,
+        location_verified,media_verified,fetched_at,raw)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(property_id) DO UPDATE SET
+        listing_id=excluded.listing_id,listing_type=excluded.listing_type,category=excluded.category,
+        subcategory=excluded.subcategory,title=excluded.title,description=excluded.description,
+        price=excluded.price,currency=excluded.currency,country=excluded.country,
+        country_code=excluded.country_code,state=excluded.state,city=excluded.city,town=excluded.town,
+        village=excluded.village,district=excluded.district,neighborhood=excluded.neighborhood,
+        street=excluded.street,house_number=excluded.house_number,postal_code=excluded.postal_code,
+        landmark=excluded.landmark,lat=excluded.lat,lng=excluded.lng,video=excluded.video,
+        video_url=excluded.video_url,images=excluded.images,bedrooms=excluded.bedrooms,
+        bathrooms=excluded.bathrooms,building_size=excluded.building_size,land_size=excluded.land_size,
+        parking_spaces=excluded.parking_spaces,features=excluded.features,condition=excluded.condition,
+        listing_status=excluded.listing_status,coordinates_verified=excluded.coordinates_verified,
+        location_verified=excluded.location_verified,media_verified=excluded.media_verified,
+        fetched_at=excluded.fetched_at,raw=excluded.raw`,
+      [pid, p.listing_id, clean(row.listing_type), clean(row.category), clean(row.subcategory),
+       clean(row.title) || p.title, clean(row.description), row.price ?? p.price,
+       clean(row.currency) || p.currency || 'USD', clean(row.country), countryCol,
+       clean(row.state), clean(row.city), clean(row.town), clean(row.village),
+       clean(row.district), clean(row.neighborhood), clean(row.street), clean(row.house_number),
+       clean(row.postal_code), clean(row.landmark), lat, lng, video, video,
+       JSON.stringify(images), clean(row.bedrooms), clean(row.bathrooms),
+       clean(row.building_size), clean(row.land_size), clean(row.parking_spaces),
+       JSON.stringify(features), clean(row.condition), clean(row.listing_status),
+       lat != null && lng != null ? 1 : 0, lat != null && lng != null ? 1 : 0,
+       video ? 1 : images.length ? 1 : 0, db.now(),
+       JSON.stringify({ source: 'showroom_listings', fetched_from: 'supabase' })]
+    );
+    enriched++;
+  }
+
+  // Connect every listing to its resolved real location in the location DB.
+  const { resolveListingLocation, linkListing } = require('../lib/location');
+  const rich = db.all("SELECT * FROM shop_products WHERE published=1 AND country_code != ''");
+  for (const r of rich) {
+    const loc = resolveListingLocation(r, { includeStreet: true, verified: !!(r.lat != null && r.lng != null) });
+    if (loc) linkListing('property', r.listing_id, loc, 'primary');
+  }
+  db.persist();
+  return { enriched, linked: rich.length };
 }
 
 // Automatic daily sync: skips if a sync already ran within the cooldown.
@@ -180,7 +293,15 @@ function selectProducts(mode, limit) {
     const params = limit ? [limit] : [];
     rows = db.all(qs, params);
   }
-  return rows;
+  // Sold listings keep their live property page (and schema) but never appear
+  // in the active daily-edition product lineups.
+  return rows.filter((p) => !isSold(p));
+}
+
+// True when the shop marks the listing as sold / no longer available.
+function isSold(p) {
+  const s = String((p && (p.listing_status || p.listing_condition)) || '').toLowerCase();
+  return s.indexOf('sold') !== -1 || s.indexOf('not available') !== -1 || s.indexOf('unavailable') !== -1;
 }
 
 // Verify which listings are currently active in the shop (the exact data the
@@ -377,6 +498,9 @@ async function publishDaily(countries, theDate) {
 
   const activeIds = await fetchActivePropertyIds();
   let rows = db.all('SELECT * FROM shop_products WHERE published=1 ORDER BY listing_id ASC');
+  // Sold listings stay on their live property pages but never enter today's
+  // active country editions (keeps "for sale" lists honest).
+  rows = rows.filter((p) => !isSold(p));
   const broken = rows.filter((p) => {
     const pid = String(p.property_id || '');
     return !pid || !activeIds.has(pid);
@@ -505,6 +629,256 @@ function dailyEdition(countryCode, date) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Real-estate & vehicle posts (authentic showroom media, Houses & Real Estate
+// and Cars & Vehicles only)
+//
+// The shop imports real property and vehicle listings into its showroom. Their
+// `showroom_listings` rows carry truthful media (often a real walkthrough video
+// as the only media), the true location, the true price and real specs. Daily
+// editions re-use a random gallery thumbnail as their front image, which is why
+// a bedframe sometimes became the "cover" of a house story.
+//
+// These dedicated posts fix that for the two real-world categories only:
+//   * Houses & Real Estate  → categories Townhouse / Houses (listing_type
+//     'property'; subcategories Residential Properties / Tiny Home / ...)
+//   * Cars & Vehicles       → categories Cars / Cars & Vehicles / Trucks /
+//     Motorcycles and genuine RV subcategories under Motorhomes (the Motorhomes
+//     category also contains mis-filed furniture like bed frames, so only real
+//     RVs/motorhomes within it qualify).
+// Each post uses the listing's own real media (real video first, otherwise the
+// real image), the correct title, real location, real price and real specs.
+// Listings without usable media are never published, so there are no fake
+// covers. The existing automatic posting system is untouched.
+// ---------------------------------------------------------------------------
+
+const SHOWROOM_SELECT =
+  'property_id,listing_type,category,subcategory,title,description,price,currency,country,country_code,state,city,town,' +
+  'video,video_url,images,bedrooms,bathrooms,building_size,land_size,parking_spaces,features,condition,listing_status';
+const STORAGE_PUBLIC = SUPABASE_URL + '/storage/v1/object/public/';
+
+function isHousingListing(p) {
+  const cat = String(p.category || '').trim().toLowerCase();
+  const sub = String(p.subcategory || '').trim().toLowerCase();
+  return cat === 'townhouse' || cat === 'houses' || cat === 'property' ||
+    ['residential properties', 'tiny home', 'villa', 'apartment', 'condominium', 'townhouse'].includes(sub);
+}
+
+function isVehicleListing(p) {
+  const cat = String(p.category || '').trim().toLowerCase();
+  const sub = String(p.subcategory || '').trim().toLowerCase();
+  if (['cars', 'cars & vehicles', 'trucks', 'motorcycles', 'automobiles', 'vehicles'].includes(cat)) return true;
+  if (cat === 'motorhomes') {
+    return ['class a motorhome', 'class b motorhome', 'class c motorhome', 'class a rv', 'class b rv',
+      'class c rv', 'motorhomes', 'rv', 'rvs', 'recreational vehicle', 'camper', 'campervan'].includes(sub);
+  }
+  return ['suv', 'sedan', 'sports car', 'luxury coupe', 'luxury suv', 'hatchback', 'coupe',
+    'convertible', 'pickup', 'pickup truck', 'truck', 'semi truck', 'van', 'motorcycle'].includes(sub);
+}
+
+function absMedia(u) {
+  if (!u) return '';
+  const s = String(u).trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^\/\//.test(s)) return 'https:' + s;
+  const path = s.replace(/^\/+/, '');
+  return STORAGE_PUBLIC + (/^product-images\//.test(path) ? path : 'product-images/' + path);
+}
+
+function isMediaVideo(u) {
+  return /\.(mp4|webm|ogv|mov|m4v|mpg|mpeg)(\?|$)/i.test(String(u || ''));
+}
+
+function cleanSpec(x) { return /^(not specified|none|null|n\/a|—|,|-)?$/i.test(String(x || '').trim()) ? '' : String(x).trim(); }
+
+// Junk rows sometimes store empty/degenerate "media" values (e.g. 'products/'
+// with no filename). Only accept media that has a real file extension.
+function hasMediaExt(u) {
+  return /\.[a-z0-9]{2,5}([?#]|$)/i.test(String(u || ''));
+}
+
+// Battery-powered kids ride-on toys are filed under Cars/Trucks but are not
+// authentic vehicles, so they never appear as "Vehicle for sale" posts.
+function isToyVehicle(p) {
+  return /(kids|ride-on|ride on|toy |toys|12 ?v\b|rc car|push car)/i.test(String(p.title || ''));
+}
+
+function firstImageMedia(row, fallbackThumb) {
+  const imgs = Array.isArray(row.images)
+    ? row.images.map(absMedia).filter((u) => u && hasMediaExt(u) && !isMediaVideo(u))
+    : [];
+  if (imgs.length) return imgs[0];
+  const fb = absMedia(fallbackThumb);
+  return fb && hasMediaExt(fb) && !isMediaVideo(fb) ? fb : '';
+}
+
+function firstVideoMedia(row) {
+  const v = absMedia(row.video || row.video_url || '');
+  if (v && isMediaVideo(v)) return v;
+  const imgs = Array.isArray(row.images) ? row.images.map(absMedia).filter((u) => u && isMediaVideo(u)) : [];
+  return imgs[0] || '';
+}
+
+function mediaCandidates(row, fallbackThumb) {
+  const out = [];
+  const v = firstVideoMedia(row || {});
+  if (v) out.push(v);
+  const im = firstImageMedia(row || {}, fallbackThumb || '');
+  if (im) out.push(im);
+  return out;
+}
+
+async function verifyMedia(u) {
+  try {
+    const r = await fetch(u, { method: 'HEAD', signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return false;
+    return /^(image|video)\//.test(String(r.headers.get('content-type') || ''));
+  } catch (e) {
+    return false;
+  }
+}
+
+async function fetchShowroomListings() {
+  const url = SUPABASE_URL + '/rest/v1/showroom_listings?select=' + encodeURIComponent(SHOWROOM_SELECT) + '&limit=5000';
+  const res = await fetch(url, {
+    headers: { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY },
+    signal: AbortSignal.timeout(90000)
+  });
+  if (!res.ok) throw new Error('Showroom listings fetch failed: HTTP ' + res.status);
+  const rows = await res.json();
+  const map = new Map();
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (r && r.property_id) map.set(String(r.property_id), r);
+  }
+  return map;
+}
+
+// Idempotent, change-detected posts for Houses & Real Estate and Cars &
+// Vehicles only. Duplicate imports of the same house (two property_ids sharing
+// one title) are de-duplicated so the house is posted once.
+async function publishHousingAndVehiclePosts() {
+  await db.ready();
+  const listings = await fetchShowroomListings();
+  const seenTitles = new Set();
+  const nowTs = db.now();
+  let created = 0;
+  let updated = 0;
+  let skippedNoMedia = 0;
+  let skippedDup = 0;
+  let skippedToys = 0;
+
+  const rows = db.all('SELECT * FROM shop_products WHERE published=1 ORDER BY listing_id ASC');
+  for (const p of rows) {
+    if (!isHousingListing(p) && !isVehicleListing(p)) continue;
+    if (isVehicleListing(p) && isToyVehicle(p)) {
+      // Toys are not authentic vehicles: remove any auto-post we created for
+      // them early on, and never re-publish.
+      db.run("DELETE FROM articles WHERE guid=?", ['shop-property:' + p.listing_id]);
+      skippedToys++;
+      continue;
+    }
+
+    const row = p.property_id ? listings.get(String(p.property_id)) : null;
+    const candidates = mediaCandidates(row || {}, p.thumbnail || '');
+
+    const kind = isHousingListing(p) ? 'House' : 'Vehicle';
+    const title = String((row && row.title) ? row.title : p.title).trim().replace(/\s+/g, ' ');
+    const titleKey = title.toLowerCase().replace(/[^a-z0-9 ]+/g, '').trim();
+    if (!titleKey || seenTitles.has(titleKey)) { skippedDup++; continue; }
+    seenTitles.add(titleKey);
+
+    const loc = [cleanSpec(row && row.city), cleanSpec(row && row.state), cleanSpec(row && row.country)]
+      .filter(Boolean).join(', ');
+    const price = priceLabel({
+      price: row && row.price != null && Number(row.price) ? row.price : p.price,
+      currency: row && row.currency ? row.currency : p.currency
+    });
+    const type = String(((row && row.subcategory) || p.subcategory || p.category) || '').trim();
+    const cc = row && row.country_code ? String(row.country_code).toUpperCase() : '';
+    const ccValid = cc ? db.get('SELECT code FROM countries WHERE code=?', [cc]) : null;
+
+    const specLines = [];
+    if (isHousingListing(p)) {
+      if (cleanSpec(row && row.bedrooms)) specLines.push('Bedrooms: ' + cleanSpec(row.bedrooms));
+      if (cleanSpec(row && row.bathrooms)) specLines.push('Bathrooms: ' + cleanSpec(row.bathrooms));
+      if (cleanSpec(row && row.building_size)) specLines.push('Building size: ' + cleanSpec(row.building_size));
+      if (cleanSpec(row && row.land_size)) specLines.push('Land size: ' + cleanSpec(row.land_size));
+      if (cleanSpec(row && row.parking_spaces)) specLines.push('Parking spaces: ' + cleanSpec(row.parking_spaces));
+    }
+    if (row && Array.isArray(row.features) && row.features.length) {
+      const f = row.features.filter(cleanSpec);
+      if (f.length) specLines.push('Features: ' + f.slice(0, 8).join(', '));
+    }
+    if (cleanSpec(row && row.condition)) specLines.push('Condition: ' + cleanSpec(row.condition));
+
+    const video = candidates.find((c) => isMediaVideo(c)) || '';
+
+    const summary = (kind === 'House' ? 'Property for sale' : 'Vehicle for sale') +
+      (loc ? ' — ' + loc : '') + ' — ' + price + (type ? ' · ' + type : '') +
+      ((row && cleanSpec(row.listing_status)) ? ' · Status: ' + cleanSpec(row.listing_status) : '');
+
+    const description = String(row && row.description ? row.description : p.description || '').trim();
+    const body = [
+      description || ('Located in ' + (loc || 'the Weverse showroom') + ', this ' + (type || 'listing').toLowerCase() + ' is offered at ' + price + '.'),
+      'Key details',
+      '- Location: ' + (loc || 'Weverse showroom listing'),
+      '- Price: ' + price,
+      '- Type: ' + (type || p.category || 'Listed')
+    ].concat(specLines.map((s) => '- ' + s), [
+      video ? '- Walkthrough video: ' + video : '',
+      '- View the full listing: ' + productUrlFor(p)
+    ]).filter(Boolean).join('\n');
+
+    const guid = 'shop-property:' + p.listing_id;
+    const slug = slugFromListing(p.listing_id, 'property-' + title);
+    const link = productUrlFor(p);
+    const countryCol = ccValid ? cc : null;
+
+    const product = db.get('SELECT * FROM articles WHERE guid=?', [guid]);
+    const changed =
+      !product ||
+      product.title !== title ||
+      (product.image || '') !== (candidates[0] || '') ||
+      (product.summary || '') !== summary ||
+      (product.content || '') !== body ||
+      (product.link || '') !== link ||
+      ((product.country_code || '') !== (countryCol || '')) ||
+      ((product.source_name || '') !== 'Weverse Shop');
+    if (product && !changed) continue;
+
+    // Real-media guard: only publish a listing whose chosen media actually
+    // resolves as an image/video. Unverifiable media (e.g. stale /products/
+    // paths) never reaches the site and any leftover auto-post is removed.
+    let image = '';
+    for (const c of candidates) {
+      if (await verifyMedia(c)) { image = c; break; }
+    }
+    if (!image) {
+      db.run("DELETE FROM articles WHERE guid=?", [guid]);
+      skippedNoMedia++;
+      continue;
+    }
+
+    if (!product) {
+      db.run(
+        `INSERT INTO articles (guid,title,slug,summary,content,image,source_name,source_url,author,category,country_code,region,published_at,fetched_at,link,featured,breaking,status,clicks)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [guid, title, slug, summary, body.slice(0, 4000), image, 'Weverse Shop', SHOP_BASE, 'Weverse Shop',
+         'shopping', countryCol, null, nowTs, nowTs, link, 0, 0, 'published', 0]
+      );
+      created++;
+    } else {
+      db.run(
+        `UPDATE articles SET title=?, summary=?, content=?, image=?, link=?, country_code=?, published_at=?, fetched_at=? WHERE guid=?`,
+        [title, summary, body.slice(0, 4000), image, link, countryCol, nowTs, nowTs, guid]
+      );
+      updated++;
+    }
+  }
+  db.persist();
+  return { submitted: rows.filter((p) => isHousingListing(p) || isVehicleListing(p)).length, created, updated, skipped_no_media: skippedNoMedia, skipped_duplicates: skippedDup, skipped_toys: skippedToys };
+}
+
 // Runnable on any schedule (the in-process loop calls it every 15 minutes and
 // the Vercel cron every hour). Publishes the fresh edition set for today when:
 //   * no edition exists for today yet (self-heals a missed/partial day), or
@@ -521,12 +895,15 @@ async function autoPublish() {
   }
   await db.ready();
   await maybeSync(); // refresh the catalog first so prices/links/count are current
+  const propertyPosts = await publishHousingAndVehiclePosts().catch((err) => ({
+    error: String((err && err.message) || err)
+  }));
   const state = publishState();
   if (state.needs_publish) {
     const res = await publishDaily();
-    return { skipped: false, mode, reason: state.reason, result: res };
+    return { skipped: false, mode, reason: state.reason, result: res, property_posts: propertyPosts };
   }
-  return { skipped: true, mode, reason: state.reason };
+  return { skipped: true, mode, reason: state.reason, property_posts: propertyPosts };
 }
 
 // Current publishing state: mode, today's fresh-edition coverage and whether a
@@ -583,5 +960,6 @@ module.exports = {
   fetchCatalog, sync, maybeSync, fetchActivePropertyIds,
   productUrl, productUrlFor, SHOP_BASE,
   publishArticles, autoPublish, publishMode, publishState, PREVIEW_LISTING_IDS,
-  publishDaily, dailyEdition, supportedCountries, dateKey
+  publishDaily, dailyEdition, supportedCountries, dateKey,
+  publishHousingAndVehiclePosts, fetchShowroomListings, enrichFromShowroom
 };

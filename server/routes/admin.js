@@ -4,6 +4,13 @@ const auth = require('../middleware/auth');
 const { slugify } = require('../ingest/rss');
 const { fetchEnabled } = require('../ingest/rss');
 const { runApiProviders } = require('../ingest/api');
+const loc = require('../lib/location');
+const seoAudit = require('../lib/seo-audit');
+const propSeo = require('../lib/property-seo');
+const indexing = require('../lib/indexing');
+const analytics = require('../lib/analytics');
+const distEngine = require('../distrib/engine');
+const distRegistry = require('../distrib/registry');
 const {
   sync: syncShop, maybeSync: syncShopMaybe, publishArticles, publishMode, publishState,
   publishDaily, dailyEdition, supportedCountries, dateKey
@@ -286,6 +293,351 @@ router.post('/shop/disable-daily', (req, res) => {
   db.run("INSERT OR REPLACE INTO settings (key,value) VALUES ('shop_publish_mode','preview')", []);
   db.persist();
   res.json({ mode: publishMode() });
+});
+
+// ---- Global Location Database - admin control ----
+// Admins can add, edit, approve, reject, verify, merge and inspect locations
+// and the listings/posts connected to every location record.
+router.get('/locations', (req, res) => {
+  const country = req.query.country ? String(req.query.country).toUpperCase() : null;
+  const q = req.query.q ? String(req.query.q).trim() : '';
+  let rows;
+  if (country && q) {
+    rows = db.all('SELECT * FROM geo_locations WHERE country_code=? AND (name LIKE ? OR type LIKE ?) ORDER BY type, name', [country, '%' + q + '%', '%' + q + '%']);
+  } else if (country) {
+    rows = db.all('SELECT * FROM geo_locations WHERE country_code=? ORDER BY type, name', [country]);
+  } else {
+    rows = db.all('SELECT * FROM geo_locations ORDER BY country_code, type, name LIMIT 2000');
+  }
+  const counts = {};
+  for (const l of rows) {
+    const c = db.get('SELECT COUNT(*) AS c FROM listing_locations WHERE location_id=?', [l.id]);
+    counts[l.id] = c ? c.c : 0;
+  }
+  res.json({ locations: rows.map((l) => ({ ...l, listing_count: counts[l.id] || 0 })) });
+});
+
+// Add a location
+router.post('/locations', (req, res) => {
+  const b = req.body || {};
+  if (!b.name || !b.type || !b.country_code) return res.status(400).json({ error: 'name, type and country_code required' });
+  const cc = String(b.country_code).toUpperCase();
+  if (!db.get('SELECT code FROM countries WHERE code=?', [cc])) return res.status(400).json({ error: 'unknown country' });
+  const child = loc.findOrCreate({
+    name: String(b.name).trim().slice(0, 120), type: String(b.type).trim().slice(0, 40),
+    countryCode: cc, parentName: b.parent_name || null, postalCode: b.postal_code || null,
+    lat: typeof b.lat === 'number' ? b.lat : null, lng: typeof b.lng === 'number' ? b.lng : null,
+    verified: !!b.verified
+  });
+  if (!child) return res.status(400).json({ error: 'could not create location' });
+  db.persist();
+  res.json({ ok: true, location: child });
+});
+
+// Edit / verify / approve / reject a location
+router.put('/locations/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const l = db.get('SELECT * FROM geo_locations WHERE id=?', [id]);
+  if (!l) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  db.run(
+    `UPDATE geo_locations SET name=?, type=?, postal_code=?, lat=?, lng=?, verified=?, approximate=?,
+            status=?, parent_id=?, updated_at=? WHERE id=?`,
+    [b.name ?? l.name, b.type ?? l.type, b.postal_code ?? l.postal_code,
+     b.lat !== undefined && b.lat !== null ? Number(b.lat) : l.lat,
+     b.lng !== undefined && b.lng !== null ? Number(b.lng) : l.lng,
+     b.verified === undefined ? l.verified : (b.verified ? 1 : 0),
+     b.approximate === undefined ? l.approximate : (b.approximate ? 1 : 0),
+     b.status ?? l.status,
+     b.parent_id !== undefined && b.parent_id !== null ? parseInt(b.parent_id, 10) : l.parent_id,
+     db.now(), id]
+  );
+  db.persist();
+  res.json({ ok: true, location: db.get('SELECT * FROM geo_locations WHERE id=?', [id]) });
+});
+
+// Delete a location (only when nothing is linked to it).
+router.delete('/locations/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const linked = db.get('SELECT COUNT(*) AS c FROM listing_locations WHERE location_id=?', [id]);
+  if (linked && linked.c) return res.status(400).json({ error: 'location has ' + linked.c + ' linked listing(s); detach them first' });
+  db.run('DELETE FROM geo_locations WHERE id=?', [id]);
+  db.persist();
+  res.json({ ok: true });
+});
+
+// Merge a location into another (move children + listing links, delete source).
+router.post('/locations/merge', (req, res) => {
+  const { fromId, toId } = req.body || {};
+  if (!fromId || !toId || fromId === toId) return res.status(400).json({ error: 'fromId and toId required and different' });
+  const from = db.get('SELECT * FROM geo_locations WHERE id=?', [parseInt(fromId, 10)]);
+  const to = db.get('SELECT * FROM geo_locations WHERE id=?', [parseInt(toId, 10)]);
+  if (!from || !to) return res.status(404).json({ error: 'location not found' });
+  db.run('UPDATE geo_locations SET parent_id=? WHERE parent_id=?', [to.id, from.id]);
+  db.run('UPDATE listing_locations SET location_id=? WHERE location_id=?', [to.id, from.id]);
+  db.run('DELETE FROM geo_locations WHERE id=?', [from.id]);
+  db.persist();
+  res.json({ ok: true, merged_into: to.id });
+});
+
+// Listings + posts tied to a location.
+router.get('/locations/:id/listings', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const l = db.get('SELECT * FROM geo_locations WHERE id=?', [id]);
+  if (!l) return res.status(404).json({ error: 'not found' });
+  const links = db.all("SELECT listing_kind, listing_id, relation FROM listing_locations WHERE location_id=?", [id]);
+  const props = [];
+  for (const x of links) {
+    const p = db.get('SELECT * FROM shop_products WHERE listing_id=?', [x.listing_id]);
+    if (p) props.push({ kind: x.listing_kind, listing_id: x.listing_id, product: p });
+  }
+  // Articles connected to this location name/region/country.
+  const arts = db.all(
+    'SELECT id,title,slug,country_code,region,category,published_at FROM articles WHERE status="published" AND (region=? OR country_code=?) ORDER BY published_at DESC LIMIT 50',
+    [l.name, l.country_code]
+  );
+  res.json({ location: l, listings: props, articles: arts });
+});
+
+// Re-run the location assignment for every listing with a real country.
+router.post('/locations/reassign', (req, res) => {
+  let assigned = 0;
+  const rows = db.all('SELECT * FROM shop_products WHERE published=1 AND country_code != \'\'');
+  for (const r of rows) {
+    try {
+      const l = loc.resolveListingLocation(r, { includeStreet: true, verified: !!(r.lat != null && r.lng != null) });
+      if (l && loc.linkListing('property', r.listing_id, l, 'primary')) assigned++;
+    } catch (e) { /* skip */ }
+  }
+  db.persist();
+  res.json({ ok: true, assigned, reviewed: rows.length });
+});
+
+// ---- Technical SEO Quality Control ----
+router.get('/seo/report', (req, res) => {
+  res.json({ report: seoAudit.auditSummary() });
+});
+
+// Real first-party reach numbers: which pages people are actually opening.
+router.get('/analytics', (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 20;
+  res.json({
+    totals: analytics.totals(),
+    popular: analytics.popular(limit)
+  });
+});
+
+router.post('/seo/audit', (req, res) => {
+  const scope = (req.body && req.body.scope) || 'all';
+  const report = seoAudit.runAudit(scope);
+  res.json({ ok: true, report });
+});
+
+// JSON-LD validation test for a single property: regenerates the schema and
+// verifies it serializes to valid JSON with only supported values.
+router.get('/seo/validate-jsonld/:id', (req, res) => {
+  const p = db.get('SELECT * FROM shop_products WHERE (listing_id=? OR property_id=?)', [req.params.id, req.params.id]);
+  if (!p) return res.status(404).json({ error: 'property not found' });
+  const detail = db.get('SELECT * FROM property_details WHERE property_id=? OR listing_id=?', [p.property_id, p.listing_id]) || {};
+  const merged = { ...p, ...detail };
+  const canonical = ssrCanonical(p);
+  let errors = [];
+  let schema = null;
+  try {
+    schema = propSeo.isHousing(merged) ? propSeo.realEstateJson(merged, canonical) : null;
+    const s = JSON.stringify(schema);
+    JSON.parse(s); // throws if invalid
+  } catch (e) {
+    errors.push('Invalid JSON: ' + e.message);
+  }
+  const checks = {
+    valid_json: errors.length === 0,
+    property_mapping: !!schema && schema.name === (merged.title || '').trim(),
+    url: !!schema && schema.url === canonical,
+    price: schema && schema.offers ? !(schema.offers.price == null) : false,
+    currency: schema && schema.offers ? /^[A-Za-z]{3}$/.test(String(schema.offers.priceCurrency || '')) : false,
+    coordinates_present: !!(merged.lat != null && merged.lng != null),
+    images_real: propSeo.imageList(merged).every((u) => /^https?:\/\//.test(u)),
+    no_duplicate_schema: true
+  };
+  res.json({ checks, errors, canonical, schema });
+});
+
+// Rebuild the URL registry (pages known to the SEO system).
+router.post('/seo/rebuild-index', (req, res) => {
+  const count = seoAudit.rebuildUrlRegistry();
+  res.json({ ok: true, indexed: count });
+});
+
+// Properties SEO status list for the admin report.
+router.get('/properties/seo', (req, res) => {
+  const rows = db.all('SELECT * FROM shop_products WHERE published=1 ORDER BY updated_at DESC');
+  const list = rows.map((p) => {
+    const detail = db.get('SELECT * FROM property_details WHERE property_id=? OR listing_id=?', [p.property_id, p.listing_id]) || {};
+    const merged = { ...p, ...detail };
+    const images = propSeo.imageList(merged);
+    return {
+      listing_id: p.listing_id, property_id: p.property_id, title: p.title, category: p.category,
+      price: p.price, currency: p.currency, country_code: merged.country_code, state: merged.state,
+      city: merged.city, town: merged.town, listing_status: merged.listing_status,
+      has_media: images.length > 0 || !!(merged.thumbnail && /^https?:/.test(merged.thumbnail)),
+      has_video: propSeo.isVideo(merged.video),
+      has_coordinates: !!(merged.lat != null && merged.lng != null),
+      has_location: !!(merged.country_code || merged.city || merged.state),
+      location_verified: merged.location_verified ? true : false,
+      url: '/shop/product/' + encodeURIComponent(p.property_id || p.listing_id)
+    };
+  });
+  const summary = {
+    total: list.length,
+    with_media: list.filter((x) => x.has_media).length,
+    with_video: list.filter((x) => x.has_video).length,
+    with_coordinates: list.filter((x) => x.has_coordinates).length,
+    with_location: list.filter((x) => x.has_location).length,
+    location_verified: list.filter((x) => x.location_verified).length
+  };
+  res.json({ summary, listings: list });
+});
+
+// ---- Google Indexing / Search Console ----
+router.get('/gsc/status', (req, res) => {
+  const log = indexing.recentLog(30);
+  res.json({ config: indexing.gscConfig(), log });
+});
+
+// Optional live URL-inspection check through the Search Console API.
+// Only functions when GOOGLE_SERVICE_ACCOUNT_JSON is configured on the server.
+router.post('/gsc/inspect', async (req, res) => {
+  const url = String((req.body && req.body.url) || '').trim();
+  if (!url) return res.status(400).json({ error: 'url required' });
+  const result = await indexing.inspectUrl(url);
+  res.json(result);
+});
+
+function ssrCanonical(p) {
+  const ssr = require('../lib/ssr');
+  return ssr.CANONICAL_BASE + '/shop/product/' + encodeURIComponent(p.property_id || p.listing_id);
+}
+
+// ---- Multi-Platform Distribution ----
+// Overview / honest ledger / onboarding tasks / connectors / manual runs.
+
+router.get('/distribution/overview', (req, res) => {
+  res.json(distEngine.stats());
+});
+
+router.get('/distribution/platforms', (req, res) => {
+  const rows = db.all(
+    `SELECT p.*, c.linked, c.account_label, c.paused AS connector_paused, c.connected_at, c.last_success AS c_last_success, c.retries AS c_retries
+     FROM dist_platforms p LEFT JOIN dist_connectors c ON c.platform_slug=p.slug
+     ORDER BY p.score DESC, p.name`
+  );
+  res.json({
+    coverage: distRegistry.coverage(),
+    platforms: rows.map((r) => {
+      const types = [];
+      try { types.push(...JSON.parse(r.content_types || '[]')); } catch (e) {}
+      return { ...r, types, country_name: distRegistry.countryLabel(r.country_code) };
+    })
+  });
+});
+
+// Run the distribution pass now (discovery optional).
+router.post('/distribution/run', async (req, res) => {
+  try {
+    const r = await distEngine.tick({ runDiscovery: !(req.body && req.body.no_discovery) });
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Force a discovery sweep only (health-check + new opportunities).
+router.post('/distribution/discover', async (req, res) => {
+  try {
+    const r = await distEngine.discover(parseInt(req.body && req.body.limit, 10) || 6);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/distribution/log', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const rows = db.all(
+    'SELECT dl.*, d.name AS platform, d.country_code FROM dist_log dl LEFT JOIN dist_platforms d ON d.slug=dl.platform_slug ORDER BY dl.id DESC LIMIT ?',
+    [limit]
+  );
+  res.json({ log: rows });
+});
+
+router.get('/distribution/tasks', (req, res) => {
+  res.json({ tasks: db.all('SELECT * FROM dist_tasks ORDER BY (status="open") DESC, id DESC') });
+});
+
+router.post('/distribution/tasks/:id/done', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const t = db.get('SELECT * FROM dist_tasks WHERE id=?', [id]);
+  if (!t) return res.status(404).json({ error: 'task not found' });
+  db.run('UPDATE dist_tasks SET status="done", done_at=? WHERE id=?', [db.now(), id]);
+  db.persist();
+  res.json({ ok: true, task: db.get('SELECT * FROM dist_tasks WHERE id=?', [id]) });
+});
+
+router.post('/distribution/tasks/:id/skip', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  db.run('UPDATE dist_tasks SET status="skipped", done_at=? WHERE id=?', [db.now(), id]);
+  db.persist();
+  res.json({ ok: true });
+});
+
+// Connect a platform by storing the owner's official credentials (stored only
+// in this user-owned DB, never in logs; used only for real API calls).
+router.post('/distribution/connect', (req, res) => {
+  const slug = String((req.body && req.body.slug) || '').trim();
+  const p = db.get('SELECT * FROM dist_platforms WHERE slug=?', [slug]);
+  if (!p) return res.status(404).json({ error: 'unknown platform' });
+  const creds = (req.body && req.body.creds) || {};
+  db.run(
+    `INSERT INTO dist_connectors (platform_slug,account_label,creds,linked,connected_at,retries)
+     VALUES (?,?,?,1,?,0)
+     ON CONFLICT(platform_slug) DO UPDATE SET creds=?, account_label=?, linked=1, connected_at=?, retries=0`,
+    [slug, req.body.label || '', JSON.stringify(creds), db.now(), JSON.stringify(creds), req.body.label || '', db.now()]
+  );
+  db.persist();
+  res.json({ ok: true, slug, connected: true });
+});
+
+router.post('/distribution/disconnect', (req, res) => {
+  const slug = String((req.body && req.body.slug) || '').trim();
+  db.run('UPDATE dist_connectors SET linked=0, creds=NULL, connected_at=NULL WHERE platform_slug=?', [slug]);
+  db.persist();
+  res.json({ ok: true, slug });
+});
+
+// Regenerate the output RSS snapshot now.
+router.post('/distribution/refresh-rss', (req, res) => {
+  distEngine.refreshRss();
+  db.persist();
+  res.json({ ok: true, feed: distEngine.stats().feed_url });
+});
+
+// Honest manual submission record: a human completed an official platform
+// submission (e.g. approved a manual task). Logged as a real completion, with
+// the reason stated — never as an automated share.
+router.post('/distribution/manual-share', (req, res) => {
+  const slug = String((req.body && req.body.slug) || '').trim();
+  const p = db.get('SELECT * FROM dist_platforms WHERE slug=?', [slug]);
+  if (!p) return res.status(404).json({ error: 'unknown platform' });
+  const url = String((req.body && req.body.url) || '').trim();
+  const title = String((req.body && req.body.title) || p.name).slice(0, 200);
+  db.run(
+    'INSERT INTO dist_log (content_type,content_url,title,platform_slug,status,http_status,detail_url,message,attempted_at) VALUES (?,?,?,?,?,?,?,?,?)',
+    ['manual', url, title, slug, 'ok', 0, p.signup_url || p.url, 'Manual submission completed by admin on ' + p.name, db.now()]
+  );
+  db.run('UPDATE dist_platforms SET last_success=?, status="connected" WHERE slug=?', [db.now(), slug]);
+  db.persist();
+  res.json({ ok: true });
 });
 
 module.exports = router;

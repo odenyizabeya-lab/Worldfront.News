@@ -26,6 +26,11 @@ jobs:
             -H "Content-Type: application/json" \
             https://www.worldfront.news/api/cron/shop-tick)
           echo "status=$code"
-          cat /tmp/wf-hourly.json
+          body=$(cat /tmp/wf-hourly.json)
+          echo "response=$body"
           echo
+          echo "published=$(echo "$body" | grep -o '"published":[a-z]*' | head -1)"
+          echo "publish_detail=$(echo "$body" | grep -o '"mode":"[^"]*"\|"reason":"[^"]*"' | head -2)"
+          echo "rebuild_detail=$(echo "$body" | grep -o '"via":"[^"]*"\|"rebuilt":[a-z]*\|"skipped":[a-z]*' | head -3)"
+          echo "error=$(echo "$body" | grep -o '"error":"[^"]*"' | head -1)"
           if [ "$code" != "200" ]; then exit 1; fi

@@ -1,0 +1,8 @@
+.env
+.env.*
+.git
+.gitignore
+.gitattributes
+*.log
+node_modules
+README.md
