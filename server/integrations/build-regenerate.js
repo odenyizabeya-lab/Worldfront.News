@@ -58,6 +58,12 @@ async function main() {
   } catch (e) {
     console.log('[build-regenerate] daily publish skipped:', e.message);
   }
+  try {
+    const inl = await shop.publishInternationalPages();
+    console.log(`[build-regenerate] international product pages: ${inl.pairs} pairs (${inl.created} new, ${inl.updated} refreshed, ${inl.unchanged} unchanged) across ${inl.countries} countries`);
+  } catch (e) {
+    console.log('[build-regenerate] international pages skipped:', e.message);
+  }
   db.persist();
   console.log('[build-regenerate] bundled DB regenerated:', dbFile, '(' + Math.round(fs.statSync(dbFile).size / 1024 / 1024) + ' MB)');
 }

@@ -70,6 +70,25 @@ function buildFeed() {
     });
   }
 
+  // Latest internationally promoted product pages — a bounded sample so the
+  // feed mixes new/updated country pages naturally (never the full 6,800+).
+  const promos = db.all(
+    'SELECT scp.listing_id, scp.country_code, scp.headline, scp.summary, scp.updated_at, sp.property_id, sp.thumbnail, sp.title AS ptitle ' +
+    'FROM shop_country_pages scp JOIN shop_products sp ON sp.property_id = scp.listing_id OR sp.listing_id = scp.listing_id ' +
+    "WHERE scp.status='published' ORDER BY scp.updated_at DESC, scp.listing_id LIMIT 12"
+  );
+  for (const pr of promos) {
+    const pid = pr.property_id || pr.listing_id;
+    items.push({
+      title: pr.headline,
+      url: base() + '/shop/product/' + encodeURIComponent(pid) + '/for/' + pr.country_code,
+      summary: (pr.summary || (pr.ptitle || '') + ' — internationally promoted product page.').slice(0, 600),
+      pubDate: pr.updated_at ? new Date(pr.updated_at * 1000).toUTCString() : null,
+      image: /^https?:\/\//.test(pr.thumbnail || '') ? pr.thumbnail : '',
+      kind: 'shopping'
+    });
+  }
+
   // Site-authored CMS articles.
   const owned = db.all(
     'SELECT id,title,slug,body,category,image,published_at FROM site_articles WHERE status IN ("published","live") ORDER BY COALESCE(published_at,created_at) DESC LIMIT 10'

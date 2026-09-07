@@ -9,6 +9,7 @@
 // own public JS bundles and can only read data the shop's policies allow. It can
 // never be used to write. Override all of these via environment variables.
 const db = require('../db');
+const promo = require('../lib/country-promotion');
 
 const SUPABASE_URL = (process.env.WEVERSE_SHOP_SUPABASE_URL || 'https://wttnvwpoqmbxryivcerf.supabase.co').replace(/\/+$/, '');
 const ANON_KEY = process.env.WEVERSE_SHOP_ANON_KEY || 'sb_publishable_X_6kXsJwApi7v7HwoC1xtA_igns4Rxa';
@@ -588,10 +589,24 @@ async function publishDaily(countries, theDate) {
   const pruned = db.get('SELECT COUNT(*) AS n FROM shop_publications WHERE pub_date < ?', [cutoff]).n;
   db.run('DELETE FROM shop_publications WHERE pub_date < ?', [cutoff]);
   db.run('DELETE FROM shop_publication_days WHERE pub_date < ?', [cutoff]);
+
+  // International product pages: refresh the product × country deep articles so
+  // every supported country always has the latest picks (idempotent upsert).
+  const international = await publishInternationalPages();
   db.run("INSERT OR REPLACE INTO settings (key,value) VALUES ('last_shop_publish',?)", [String(db.now())]);
   db.persist();
 
-  return { mode: 'daily', date, countries: articles, products_per_country: count, items, created, updated, pruned, broken: broken.length };
+  return { mode: 'daily', date, countries: articles, products_per_country: count, items, created, updated, pruned, broken: broken.length, international_pages: international };
+}
+
+// Publish (or refresh) the internationally promoted product pages for the site's
+// chosen regions. Wrapper around lib/country-promotion so callers do not need to
+// know the module, and so tests/CLI can limit the batch (`limit`, `rotate`).
+async function publishInternationalPages(opts = {}) {
+  await db.ready();
+  const res = await promo.publishCountryPages(opts);
+  db.persist();
+  return res;
 }
 
 // Read one edition by country + date, joined with the single source-of-truth
@@ -903,7 +918,10 @@ async function autoPublish() {
     const res = await publishDaily();
     return { skipped: false, mode, reason: state.reason, result: res, property_posts: propertyPosts };
   }
-  return { skipped: true, mode, reason: state.reason, property_posts: propertyPosts };
+  // Even when today's editions are fresh, keep the international product pages
+  // in step with the catalog (new owner products appear as new country pages).
+  const international = await publishInternationalPages();
+  return { skipped: true, mode, reason: state.reason, property_posts: propertyPosts, international_pages: international };
 }
 
 // Current publishing state: mode, today's fresh-edition coverage and whether a
@@ -961,5 +979,6 @@ module.exports = {
   productUrl, productUrlFor, SHOP_BASE,
   publishArticles, autoPublish, publishMode, publishState, PREVIEW_LISTING_IDS,
   publishDaily, dailyEdition, supportedCountries, dateKey,
-  publishHousingAndVehiclePosts, fetchShowroomListings, enrichFromShowroom
+  publishHousingAndVehiclePosts, fetchShowroomListings, enrichFromShowroom,
+  publishInternationalPages
 };

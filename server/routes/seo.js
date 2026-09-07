@@ -4,6 +4,7 @@ const shop = require('../integrations/weverse-shop');
 const ssr = require('../lib/ssr');
 const loc = require('../lib/location');
 const propSeo = require('../lib/property-seo');
+const promo = require('../lib/country-promotion');
 
 const { esc, CANONICAL_BASE } = ssr;
 const router = express.Router();
@@ -205,10 +206,22 @@ router.get('/shop/product/:id', (req, res) => {
     ? [propSeo.realEstateJson(merged, canonical), crumbJson]
     : [ssr.productJson(merged, canonical), crumbJson];
 
+  // hreflang alternates → every localized (targeted-country) page for this
+  // product, so the global page and its localized siblings stay linked.
+  const hreflang = [];
+  const alts = promo.isTargetProduct(merged) ? db.all(
+    'SELECT country_code FROM shop_country_pages WHERE listing_id=? AND status=\'published\' ORDER BY country_code',
+    [pid]
+  ) : [];
+  for (const a of alts) {
+    hreflang.push({ code: a.country_code.toLowerCase(), url: CANONICAL_BASE + '/shop/product/' + encodeURIComponent(pid) + '/for/' + a.country_code });
+  }
+
   res.type('html').send(ssr.layout({
     title: p.title,
     description: ((p.description || p.title) + '').slice(0, 200),
     canonical,
+    hreflang,
     og: {
       title: p.title,
       description: (p.description || '').slice(0, 200).replace(/\s+$/, ''),
@@ -232,6 +245,203 @@ function resolvedPropertyLocationPage(p) {
     return null;
   }
 }
+
+// ---------- International product promotion pages ----------
+//
+// For every Weverse Online Shop product that belongs to the internationally
+// targeted types (houses/rentals, cars/trucks, motorhomes, fridges, washing
+// machines, TVs) and every supported country, we serve two indexable pages:
+//   * /shop/product/:id/for/:cc — the localized deep article + product page
+//     for that country's readers (unique copy generated from real facts),
+//   * /shop/country/:cc          — the country hub listing all of that
+//     country's promoted product pages.
+// Both are built by the same deterministic generator, so each product ×
+// country combination has its own stable text, and everything links back to
+// the canonical global product page plus the real Weverse Online Shop listing.
+
+function promoPageData(req, res) {
+  const id = String(req.params.id);
+  const cc = String(req.params.cc).toUpperCase().slice(0, 3);
+  if (!/^[A-Z]{2,3}$/.test(cc)) return null;
+  const p = db.get(
+    'SELECT * FROM shop_products WHERE (listing_id=? OR property_id=?) AND published=1',
+    [id, id]
+  );
+  if (!p) { ssr.notFoundPage(res, 'That product is not available.'); return null; }
+  if (!promo.isTargetProduct(p)) { ssr.notFoundPage(res, 'That product is not part of the international promotion.'); return null; }
+  const country = db.get('SELECT code, name, region, subregion FROM countries WHERE code=?', [cc]);
+  if (!country) { ssr.notFoundPage(res, 'Unknown country.'); return null; }
+  const row = promo.pageRow(p.property_id || p.listing_id, cc);
+  if (!row) { ssr.notFoundPage(res, 'No international article is published for that product and country yet.'); return null; }
+  return { p, country, row };
+}
+
+// Localized product page + deep news-style article for readers in one country.
+router.get('/shop/product/:id/for/:cc', (req, res) => {
+  const d = promoPageData(req, res);
+  if (!d) return;
+  const { p, country, row } = d;
+  const pid = p.property_id || p.listing_id;
+  const key = String(pid);
+  const seed = promo.seedFor(key, country.code);
+  const canonical = CANONICAL_BASE + '/shop/product/' + encodeURIComponent(pid) + '/for/' + country.code;
+
+  const detail = db.get('SELECT * FROM property_details WHERE property_id=? OR listing_id=?', [pid, p.listing_id]) || {};
+  const merged = { ...p, ...detail };
+  const images = propSeo.imageList(merged);
+  const heroImg = images.find((u) => !propSeo.isVideo(u)) || (merged.thumbnail && /^https?:/.test(merged.thumbnail) ? merged.thumbnail : '') || '';
+  const heroVid = images.find(propSeo.isVideo) || (merged.video && /^https?:/.test(merged.video) ? merged.video : '') || '';
+  const alt = propSeo.generatedAltText(merged);
+  const price = ssr.fmtPrice(merged.price, merged.currency);
+  const noun = promo.typeNoun(merged).toLowerCase();
+  const rent = promo.forRent(merged);
+
+  const related = db.all(
+    'SELECT property_id,listing_id,title,thumbnail,price,currency,product_url,category FROM shop_products WHERE published=1 AND property_id != ? ORDER BY updated_at DESC LIMIT 6',
+    [pid]
+  ).filter((r) => promo.isTargetProduct(r));
+
+  // Breadcrumb: Home › Shop › Country › Product (localized).
+  const crumbItems = [
+    { name: 'Home', url: '/' },
+    { name: 'Shop', url: '/shop' },
+    { name: country.name, url: '/shop/country/' + country.code },
+    { name: p.title, url: '/shop/product/' + encodeURIComponent(pid) + '/for/' + country.code }
+  ];
+
+  let body = '<article class="article-page">';
+  body += '<nav class="seo-crumbs">' +
+    '<a href="/">Home</a> › <a href="/shop">Shop</a> › ' +
+    '<a href="/shop/country/' + esc(country.code) + '">' + esc(country.name) + '</a> › ' + esc(p.title) + '</nav>';
+  body += '<span class="cat-tag">' + esc(noun) + '</span> <span class="pill">International · ' + esc(country.name) + '</span>';
+  body += '<h1>' + esc(row.headline) + '</h1>';
+  body += '<div class="article-meta"><span class="src">Weverse Online Shop</span>' +
+    '<span>' + esc(country.name) + '</span>' +
+    (p.subcategory && promo.normPublic !== 'not specified' ? '<span>' + esc(p.subcategory) + '</span>' : '') +
+    '<span>' + esc(p.category || 'shopping') + '</span></div>';
+
+  if (heroVid) {
+    body += '<figure class="property-figure"><video class="article-hero-img is-product" src="' + esc(heroVid) + '" autoplay muted loop playsinline controls preload="metadata" onerror="this.style.display=\'none\'"></video></figure>';
+  } else if (heroImg) {
+    body += '<figure class="property-figure"><img class="article-hero-img is-product" src="' + esc(heroImg) + '" alt="' + esc(alt) + '" /></figure>';
+  }
+  body += '<p class="product-price" style="font-size:1.6rem;font-weight:700">' + esc(price) + '</p>';
+
+  // The generated article body is the professional, unique news-style copy.
+  body += promo.articleBody(merged, country, seed);
+
+  if (rent) {
+    body += '<p class="muted" style="margin-top:14px">This listing is offered as a rental through the Weverse Online Shop.</p>';
+  }
+
+  body += '<div class="article-actions">' +
+    '<a class="btn btn-primary" href="' + esc(merged.product_url || '#') + '" target="_blank" rel="noopener noreferrer noopener">View and buy on Weverse ↗</a>' +
+    '<a class="btn btn-outline" href="' + esc('/shop/product/' + encodeURIComponent(pid)) + '">Global product page</a>' +
+    '<a class="btn btn-outline" href="' + esc('/shop/country/' + country.code) + '">All products for ' + esc(country.name) + '</a>' +
+    '</div>';
+
+  if (related.length) {
+    body += '<h2 style="margin-top:28px">More internationally promoted products</h2><div class="grid">' +
+      related.map((r) => productCard(Object.assign(r, (function () { const dd = db.get('SELECT * FROM property_details WHERE property_id=?', [r.property_id]); return dd || {}; })()))).join('') +
+      '</div>';
+  }
+  body += '<p class="muted" style="margin-top:22px;font-size:.85rem">WorldFront.News highlights Weverse Online Shop products for readers in ' + esc(country.name) +
+    '. The information above comes from the shop\'s official catalog; pricing and availability may change at any time.</p>';
+  body += '</article>';
+
+  // hreflang: this localized page (lang = country code), x-default → the
+  // global product page, plus the other targeted countries for this product.
+  const hreflang = [{ code: 'x-default', url: CANONICAL_BASE + '/shop/product/' + encodeURIComponent(pid) }];
+  const alts = db.all(
+    'SELECT country_code, updated_at FROM shop_country_pages WHERE listing_id=? AND status=\'published\' ORDER BY country_code',
+    [key]
+  );
+  for (const a of alts) {
+    if (a.country_code !== country.code) {
+      hreflang.push({ code: a.country_code.toLowerCase(), url: CANONICAL_BASE + '/shop/product/' + encodeURIComponent(pid) + '/for/' + a.country_code });
+    }
+  }
+
+  const jsonld = [
+    ssr.newsJson({ title: row.headline, summary: row.summary, image: heroImg && !propSeo.isVideo(heroImg) ? heroImg : undefined, published_at: row.published_at, author: 'Weverse Online Shop' }, canonical),
+    ssr.productJson(merged, canonical),
+    ssr.breadcrumbJson(crumbItems)
+  ];
+
+  res.type('html').send(ssr.layout({
+    title: row.headline,
+    description: (row.summary || p.title).slice(0, 200),
+    canonical,
+    hreflang,
+    og: {
+      title: row.headline,
+      description: (row.summary || '').slice(0, 200).replace(/\s+$/, ''),
+      image: heroImg && !propSeo.isVideo(heroImg) ? heroImg : undefined,
+      type: 'article'
+    },
+    jsonld,
+    bodyHtml: body
+  }));
+});
+
+// Country hub: every internationally promoted product for readers in one country.
+router.get('/shop/country/:cc', (req, res) => {
+  const cc = String(req.params.cc).toUpperCase().slice(0, 3);
+  if (!/^[A-Z]{2,3}$/.test(cc)) return ssr.notFoundPage(res, 'Unknown country.');
+  const country = db.get('SELECT code, name, region, subregion FROM countries WHERE code=?', [cc]);
+  if (!country) return ssr.notFoundPage(res, 'Unknown country.');
+  const canonical = CANONICAL_BASE + '/shop/country/' + cc;
+
+  const pages = promo.countryPages(cc);
+  const map = new Map(db.all('SELECT listing_id, property_id, title FROM shop_products').map((r) => [r.listing_id, r]));
+  const cards = [];
+  for (const pg of pages) {
+    const p = map.get(pg.listing_id);
+    if (!p) continue;
+    const detail = db.get('SELECT * FROM property_details WHERE property_id=?', [p.property_id]) || {};
+    cards.push(productCard(Object.assign({ ...p, ...detail }, { published: 1 })));
+  }
+  const types = db.all('SELECT DISTINCT category FROM shop_products WHERE published=1').map((r) => r.category);
+
+  let body =
+    '<nav class="seo-crumbs"><a href="/">Home</a> › <a href="/shop">Shop</a> › ' + esc(country.name) + '</nav>' +
+    '<h1 class="page-title">Weverse Online Shop picks for ' + esc(country.name) + '</h1>' +
+    '<p class="muted">International product coverage curated for readers in ' + esc(country.name) +
+    ' from the Weverse Online Shop — houses and rentals, cars, trucks and motorhomes, plus fridges, washing machines and TVs. ' +
+    'New products the owner adds are covered automatically.</p>';
+
+  const latestEd = db.get('SELECT pub_date FROM shop_publication_days WHERE country_code=? ORDER BY pub_date DESC LIMIT 1', [cc]);
+  if (latestEd) {
+    body += '<p><a class="btn btn-outline btn-sm" href="/shop/daily/' + cc + '/' + latestEd.pub_date + '">' + esc(country.name) + ' daily product update (' + esc(latestEd.pub_date) + ')</a> ' +
+      '<a class="btn btn-outline btn-sm" href="/country/' + cc + '">' + esc(country.name) + ' news</a></p>';
+  }
+
+  if (cards.length) {
+    body += '<div class="grid">' + cards.join('') + '</div>';
+  } else {
+    body += '<p class="muted">This country has no promoted product pages yet.</p>';
+  }
+  if (types.length) {
+    body += '<p class="muted" style="margin-top:20px">Shop catalog: ' +
+      types.slice(0, 24).map((t) => '<a href="/shop?category=' + encodeURIComponent(t || 'General') + '">' + esc(t || 'General') + '</a>').join(' · ') + '</p>';
+  }
+
+  res.type('html').send(ssr.layout({
+    title: 'Weverse Online Shop picks for ' + country.name,
+    description: 'International Weverse Online Shop product pages for ' + country.name + ' — houses, rentals, cars, trucks, motorhomes, fridges, washing machines and TVs.',
+    canonical,
+    og: { title: 'Weverse Online Shop picks for ' + country.name, type: 'website' },
+    jsonld: [
+      ssr.collectionPageJson('Weverse Online Shop picks for ' + country.name, canonical),
+      ssr.breadcrumbJson([
+        { name: 'Home', url: '/' },
+        { name: 'Shop', url: '/shop' },
+        { name: country.name, url: '/shop/country/' + cc }
+      ])
+    ],
+    bodyHtml: body
+  }));
+});
 
 // The real geographic chain (country → state → county/city → …) for a listing,
 // annotated with links only to pages that actually exist (never invented).
@@ -1176,7 +1386,8 @@ router.get('/sitemap.xml', (req, res) => {
     { name: 'articles', lastmod: today },
     { name: 'countries', lastmod: today },
     { name: 'categories', lastmod: today },
-    { name: 'locations', lastmod: today }
+    { name: 'locations', lastmod: today },
+    { name: 'shop-promo', lastmod: today }
   ];
   const catRows = db.all('SELECT slug FROM categories WHERE active=1 ORDER BY slug');
   for (const c of catRows) files.push({ name: 'category-' + c.slug, lastmod: today });
@@ -1262,6 +1473,30 @@ router.get('/sitemaps/:name.xml', (req, res) => {
     for (const e of rows) {
       xml += '  ' + urlXml('/shop/daily/' + e.country_code + '/' + e.pub_date, e.pub_date) + '\n';
     }
+  } else if (name === 'shop-promo') {
+    // All internationally promoted products for every supported country, plus
+    // the per-country hubs. Bounded by design (48 products × 142 countries).
+    const promos = db.all(
+      "SELECT scp.listing_id, scp.country_code, scp.updated_at, sp.property_id, sp.thumbnail " +
+      "FROM shop_country_pages scp JOIN shop_products sp ON sp.property_id = scp.listing_id OR sp.listing_id = scp.listing_id " +
+      "WHERE scp.status='published' ORDER BY scp.country_code, scp.listing_id"
+    );
+    const prodImg = new Map();
+    const hubs = new Map();
+    for (const r of promos) {
+      const pid = r.property_id || r.listing_id;
+      if (!hubs.has(r.country_code)) hubs.set(r.country_code, r.updated_at);
+      let img = '';
+      if (r.thumbnail && /^https?:/.test(r.thumbnail) && !propSeo.isVideo(r.thumbnail)) {
+        const key = pid + '|' + r.thumbnail;
+        if (!prodImg.has(key)) {
+          img = '<image:image><image:loc>' + esc(r.thumbnail) + '</image:loc></image:image>';
+          prodImg.set(key, true);
+        }
+      }
+      addUniq('/shop/product/' + encodeURIComponent(pid) + '/for/' + r.country_code, iso(r.updated_at), img);
+    }
+    for (const [cc, lm] of hubs) addUniq('/shop/country/' + cc, iso(lm));
   } else if (name === 'articles') {
     const rows = db.all("SELECT slug, published_at FROM articles WHERE status='published' AND (guid IS NULL OR guid NOT LIKE 'shop-daily:%') ORDER BY published_at DESC");
     for (const a of rows) addUniq('/article/' + encodeURIComponent(a.slug), iso(a.published_at));

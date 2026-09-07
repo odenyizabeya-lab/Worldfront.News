@@ -7,13 +7,14 @@ const { runApiProviders } = require('../ingest/api');
 const loc = require('../lib/location');
 const seoAudit = require('../lib/seo-audit');
 const propSeo = require('../lib/property-seo');
+const promo = require('../lib/country-promotion');
 const indexing = require('../lib/indexing');
 const analytics = require('../lib/analytics');
 const distEngine = require('../distrib/engine');
 const distRegistry = require('../distrib/registry');
 const {
   sync: syncShop, maybeSync: syncShopMaybe, publishArticles, publishMode, publishState,
-  publishDaily, dailyEdition, supportedCountries, dateKey
+  publishDaily, dailyEdition, supportedCountries, dateKey, publishInternationalPages
 } = require('../integrations/weverse-shop');
 
 const router = express.Router();
@@ -224,8 +225,54 @@ router.get('/shop/status', (req, res) => {
     ...publishState(),
     published_articles: pub ? pub.c : 0,
     supported_countries: supportedCountries().length,
-    editions: editionRows
+    editions: editionRows,
+    international: promo.targetStats()
   });
+});
+
+// Trigger a refresh of the internationally promoted product pages now.
+router.post('/shop/publish-international', async (req, res) => {
+  try {
+    const result = await publishInternationalPages();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Which world regions get internationally promoted product pages.
+router.get('/shop/target-regions', (req, res) => {
+  res.json({ regions: promo.supportedRegions(), all_regions: ['Americas', 'Europe', 'Oceania', 'Asia', 'Africa'] });
+});
+
+router.post('/shop/target-regions', (req, res) => {
+  const list = (req.body && req.body.regions) || [];
+  const regions = (Array.isArray(list) ? list : []).map((s) => String(s).trim());
+  const VALID = new Set(['Americas', 'Europe', 'Oceania', 'Asia', 'Africa']);
+  const keep = regions.filter((r) => VALID.has(r));
+  if (!keep.length) return res.status(400).json({ error: 'no valid regions (allowed: Americas, Europe, Oceania, Asia, Africa)' });
+  // Only keep regions the site actually has rows for.
+  const siteRegions = new Set(db.all('SELECT DISTINCT region FROM countries').map((c) => c.region));
+  const final = keep.filter((r) => siteRegions.has(r));
+  if (!final.length) return res.status(400).json({ error: 'none of those regions exist in the country list' });
+  db.run("INSERT OR REPLACE INTO settings (key,value) VALUES ('shop_target_regions',?)", [JSON.stringify(final)]);
+  db.persist();
+  res.json({ regions: final });
+});
+
+// Note: on re-running with a different region set, existing pages for the
+// deselected regions stay live (never deleted) until the owner re-publishes.
+router.post('/shop/reindex-international', async (req, res) => {
+  try {
+    // Republish all pairs and mark them for distribution again (pushed=0) so
+    // the changed content cycles into RSS/IndexNow once more.
+    const result = await publishInternationalPages();
+    db.run('UPDATE shop_country_pages SET pushed=0 WHERE status=?', ['published']);
+    db.persist();
+    res.json({ ...result, requeued_all: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.post('/shop/sync', async (req, res) => {

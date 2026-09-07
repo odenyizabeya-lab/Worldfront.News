@@ -52,6 +52,25 @@ function collectItems(sinceMs) {
     });
   }
 
+  // Internationally promoted product pages queue: new/changed combinations are
+  // marked `pushed=0` by the publisher, and we hand out a bounded daily batch
+  // (20) so the 6,800+ pages flow into RSS/IndexNow naturally over time.
+  // `promoRef` lets distribute() mark exactly the rows that made the cut.
+  const promos = db.all(
+    'SELECT scp.listing_id, scp.country_code, scp.headline, scp.summary, scp.updated_at, sp.property_id, sp.thumbnail ' +
+    'FROM shop_country_pages scp JOIN shop_products sp ON sp.property_id = scp.listing_id OR sp.listing_id = scp.listing_id ' +
+    "WHERE scp.status='published' AND scp.pushed=0 ORDER BY scp.updated_at ASC, scp.listing_id LIMIT 20"
+  );
+  for (const pr of promos) {
+    items.push({
+      kind: 'shop-promo', key: 'x' + pr.listing_id + pr.country_code,
+      promoRef: { listing_id: pr.listing_id, country_code: pr.country_code },
+      title: pr.headline,
+      url: connectors.ssrBase() + '/shop/product/' + encodeURIComponent(pr.property_id || pr.listing_id) + '/for/' + pr.country_code,
+      summary: (pr.summary || '').slice(0, 600), image: /^https?:\/\//.test(pr.thumbnail || '') ? pr.thumbnail : ''
+    });
+  }
+
   const owned = db.all('SELECT id,title,slug,body,published_at,created_at FROM site_articles WHERE status IN ("published","live") AND COALESCE(published_at,created_at)>? LIMIT 50', [sinceMs]);
   for (const a of owned) {
     items.push({
@@ -132,7 +151,20 @@ async function distribute(opts = {}) {
   const lastRow = db.get("SELECT value FROM settings WHERE key='dist_last_run'");
   const sinceMs = force ? 0 : Math.max(0, (lastRow && parseInt(lastRow.value, 10) || 0) - 6 * 3600);
   let items = collectItems(sinceMs);
-  items = items.slice(0, 80); // newest first; batch keeps it fast
+  // Core items get the first 60 slots; the promo daily batch is guaranteed its
+  // own place so the international pages always flow (newest first overall).
+  const promoItems = items.filter((it) => it.promoRef);
+  const core = items.filter((it) => !it.promoRef).slice(0, 60);
+  items = core.concat(promoItems).slice(0, 80);
+
+  // Only the promoted pages that actually made this run leave the queue; the
+  // rest stay pushed=0 and are picked up by a later distribution pass.
+  for (const it of items) {
+    if (it.promoRef) {
+      db.run('UPDATE shop_country_pages SET pushed=1 WHERE listing_id=:lid AND country_code=:cc', { lid: it.promoRef.listing_id, cc: it.promoRef.country_code });
+      delete it.promoRef;
+    }
+  }
 
   const results = { items: items.length, attempts: 0, ok: 0, discoverable: 0, pending: 0, failed: 0, by_type: {} };
   const indexNowUrls = [];
@@ -300,4 +332,4 @@ function ensureIndexNowKey() {
   return k;
 }
 
-module.exports = { tick, distribute, retryDue, discover: registry.discover, seedRegistry: registry.seedRegistry, stats, ensureIndexNowKey, refreshRss, kindOf, dayKey };
+module.exports = { tick, distribute, retryDue, discover: registry.discover, seedRegistry: registry.seedRegistry, stats, ensureIndexNowKey, refreshRss, kindOf, dayKey, collectItems };

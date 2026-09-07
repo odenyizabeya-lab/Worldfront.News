@@ -160,7 +160,7 @@ function collectionPageJson(name, url, hasPartUrl) {
 // public/index.html so the SPA can enhance the page, and injects a server-side
 // head (title, description, canonical, robots, OG, JSON-LD) so search engines
 // see complete, unique, indexable pages without executing JavaScript.
-function layout({ title, description, canonical, robots = 'index,follow', jsonld = [], og = {}, bodyHtml = '', noIndex = false }) {
+function layout({ title, description, canonical, robots = 'index,follow', jsonld = [], og = {}, bodyHtml = '', noIndex = false, hreflang = [] }) {
   let html = shell();
 
   const finalTitle = !title || String(title).indexOf(SITE_NAME) === 0 ? String(title || SITE_NAME) : String(title) + ' — ' + SITE_NAME;
@@ -192,6 +192,9 @@ function layout({ title, description, canonical, robots = 'index,follow', jsonld
 
   const extra = [];
   if (canonical) extra.push('<link rel="canonical" href="' + esc(canonical) + '" />');
+  for (const h of hreflang) {
+    if (h && h.code && h.url) extra.push('<link rel="alternate" hreflang="' + esc(h.code) + '" href="' + esc(h.url) + '" />');
+  }
   const robotsVal = noIndex ? 'noindex,follow' : robots;
   extra.push('<meta name="robots" content="' + esc(robotsVal) + '" />');
   if (process.env.GOOGLE_SITE_VERIFICATION) {

@@ -8,6 +8,11 @@ const BUNDLED_DIR = path.join(__dirname, '..', '..', 'data');
 const BUNDLED_DB = path.join(BUNDLED_DIR, 'worldfront.sqlite');
 
 function resolveDataDir() {
+  const env = process.env.WF_DATA_DIR;
+  if (env) {
+    fs.mkdirSync(env, { recursive: true });
+    return env;
+  }
   try {
     fs.mkdirSync(BUNDLED_DIR, { recursive: true });
     const probe = path.join(BUNDLED_DIR, '.write-test');
@@ -26,6 +31,8 @@ const DB_FILE = path.join(DATA_DIR, 'worldfront.sqlite');
 
 function seedBundledDb() {
   if (fs.existsSync(DB_FILE)) return;
+  // When WF_DATA_DIR is set (tests/CI) we always want a clean schema-only DB.
+  if (process.env.WF_DATA_DIR) return;
   if (fs.existsSync(BUNDLED_DB)) {
     fs.copyFileSync(BUNDLED_DB, DB_FILE);
   }
@@ -313,6 +320,24 @@ async function initialize() {
     created_at INTEGER,
     PRIMARY KEY (country_code, pub_date)
   );
+
+  -- International product promotion: one row per (target product × country)
+  -- for the localized deep articles + product pages. Generated deterministically
+  -- from the shop catalog + the site's country list; never deleted on re-run.
+  CREATE TABLE IF NOT EXISTS shop_country_pages (
+    listing_id TEXT NOT NULL,
+    country_code TEXT NOT NULL,
+    headline TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    seed INTEGER,
+    status TEXT DEFAULT 'published',
+    published_at INTEGER,
+    updated_at INTEGER,
+    pushed INTEGER DEFAULT 0,
+    PRIMARY KEY (listing_id, country_code)
+  );
+  CREATE INDEX IF NOT EXISTS idx_shop_country_pages_country ON shop_country_pages(country_code);
+  CREATE INDEX IF NOT EXISTS idx_shop_country_pages_updated ON shop_country_pages(updated_at);
 
   -- =====================================================================
   -- GLOBAL LOCATION SYSTEM (WorldFront.News)
