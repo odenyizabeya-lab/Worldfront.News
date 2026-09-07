@@ -10,11 +10,18 @@ function adminGuard() {
 
 WF.views.admin = async function (app) {
   if (!adminGuard()) {
-    app.innerHTML = '<div class="account-panel"><div class="card"><h3>Admin access</h3><p class="muted">Sign in with an admin account.</p>' +
+    app.innerHTML = '<div class="account-panel"><div class="card"><h3>Admin access</h3><p class="muted">Sign in with an admin account, create a new account, or change your password.</p>' +
       '<div class="form-row"><label>Email</label><input id="a_email" type="email" value="odenyizabeya@gmail.com"></div>' +
       '<div class="form-row"><label>Password</label><input id="a_pass" type="password"></div>' +
       '<button class="btn btn-primary btn-block" id="a_adminLogin">Sign in</button>' +
-      '<p class="muted" style="font-size:.78rem;margin-top:8px">Changes to your email/password are managed under Dashboard → Account.</p>' +
+      '<button class="btn btn-outline btn-block" style="margin-top:8px" id="a_adminRegister">Create account</button>' +
+      '<button class="btn btn-outline btn-block" style="margin-top:8px" id="a_adminChangePw">Change password</button>' +
+      '<div id="a_pwPanel" style="display:none;margin-top:12px">' +
+        '<div class="form-row"><label>Current password</label><input id="a_cur" type="password"></div>' +
+        '<div class="form-row"><label>New password (min 8 characters)</label><input id="a_new" type="password"></div>' +
+        '<div class="form-row"><label>Repeat new password</label><input id="a_new2" type="password"></div>' +
+        '<button class="btn btn-primary btn-block" id="a_savePw">Save password</button>' +
+      '</div>' +
       '</div></div>';
     document.getElementById('a_adminLogin').addEventListener('click', async () => {
       try {
@@ -23,6 +30,42 @@ WF.views.admin = async function (app) {
         localStorage.setItem('wf-token', d.token); localStorage.setItem('wf-user', JSON.stringify(d.user));
         WF.router.go('/admin');
       } catch (e) { WF.toast(e.message); }
+    });
+    document.getElementById('a_adminRegister').addEventListener('click', async () => {
+      try {
+        const email = document.getElementById('a_email').value.trim();
+        const password = document.getElementById('a_pass').value;
+        const username = (email.split('@')[0] || 'user').replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 20) || 'user';
+        const d = await WF.api('/auth/register', { method: 'POST', body: JSON.stringify({ email, username, password }) });
+        WF.state.token = d.token; WF.state.user = d.user;
+        localStorage.setItem('wf-token', d.token); localStorage.setItem('wf-user', JSON.stringify(d.user));
+        WF.toast('Account created — ' + (d.user.role === 'admin' ? 'welcome admin!' : 'note: accounts start as reader'));
+        WF.router.go(d.user.role === 'admin' ? '/admin' : '/account');
+      } catch (e) { WF.toast(e.message); }
+    });
+    const panel = document.getElementById('a_pwPanel');
+    document.getElementById('a_adminChangePw').addEventListener('click', () => {
+      const hidden = panel.style.display === 'none';
+      panel.style.display = hidden ? 'block' : 'none';
+    });
+    document.getElementById('a_savePw').addEventListener('click', async () => {
+      const email = document.getElementById('a_email').value.trim();
+      const cur = document.getElementById('a_cur').value;
+      const pw = document.getElementById('a_new').value;
+      const pw2 = document.getElementById('a_new2').value;
+      if (pw.length < 8) return WF.toast('New password must be at least 8 characters');
+      if (pw !== pw2) return WF.toast('New passwords do not match');
+      const b = document.getElementById('a_savePw');
+      b.disabled = true; b.textContent = 'Saving…';
+      try {
+        const d = await WF.api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password: cur }) });
+        WF.state.token = d.token; WF.state.user = d.user;
+        const r = await WF.api('/auth/me/change-password', { method: 'POST', body: JSON.stringify({ current_password: cur, new_password: pw }) });
+        localStorage.setItem('wf-token', d.token); localStorage.setItem('wf-user', JSON.stringify(d.user));
+        WF.toast(r.message || 'Password updated — you are signed in');
+        WF.router.go(d.user.role === 'admin' ? '/admin' : '/account');
+      } catch (e) { WF.toast(e.message); }
+      b.disabled = false; b.textContent = 'Save password';
     });
     return;
   }

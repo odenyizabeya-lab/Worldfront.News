@@ -19,7 +19,7 @@
     { "src": "/(.*)", "dest": "server/index.js" }
   ],
   "env": {
-    "SITE_URL": "https://worldfront.news"
+    "SITE_URL": "https://www.worldfront.news"
   },
   "crons": [
     { "path": "/api/cron/shop-publish", "schedule": "0 0 * * *" },

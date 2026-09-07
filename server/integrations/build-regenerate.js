@@ -14,19 +14,30 @@
 // makes the current day's editions DURABLE across cold starts (a cold function
 // starts from this bundled snapshot instead of the previous day's).
 //
-// The script fails the build ONLY when the bundled DB is missing entirely
-// (which would ship an empty site and was the failure mode of git-triggered
-// builds); every other error logs and exits 0 so deploys are never blocked
-// (the previous bundled DB is kept as a fallback).
+// When the bundled DB is missing entirely (e.g. a fresh Vercel build from a
+// Git push — data/worldfront.sqlite is gitignored), the script first runs the
+// standard seed (countries, categories, sources, default admin) so a fresh
+// build ships a complete, working site instead of failing. Every other error
+// logs and exits 0 so deploys are never blocked (the previous bundled DB is
+// kept as a fallback).
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 async function main() {
   const dataDir = path.join(__dirname, '..', '..', 'data');
   const dbFile = path.join(dataDir, 'worldfront.sqlite');
   if (!fs.existsSync(dbFile)) {
-    console.log('[build-regenerate] FATAL: no bundled DB present — refusing to ship an empty site');
-    process.exit(1);
+    console.log('[build-regenerate] no bundled DB present — running a fresh seed so this build ships a working site');
+    try {
+      const node = process.execPath;
+      execFileSync(node, [path.join(__dirname, '..', 'seed.js')], {
+        cwd: path.join(__dirname, '..', '..'),
+        stdio: 'inherit'
+      });
+    } catch (e) {
+      console.log('[build-regenerate] fresh seed failed, falling back (empty site):', e.message);
+    }
   }
   const db = require('../db');
   const shop = require('./weverse-shop');

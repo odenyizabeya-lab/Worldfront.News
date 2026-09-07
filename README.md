@@ -142,39 +142,72 @@ npm run android:open              # open in Android Studio, then Build > Generat
 
 ## ☁️ Deploying to Vercel + connecting **worldfront.news**
 
-Vercel is ideal for the web + API. **Important:** Vercel serverless functions
-have an **ephemeral filesystem**, so the SQLite file does **not** persist across
-cold starts there. Choose **one**:
+Vercel serves the SPA, REST API and SSR pages as one Node serverless function
+(`vercel.json` routes everything to `server/index.js`; static assets under
+`public/` are served inside the same function).
 
-- **Recommended (fastest, simplest):** run the Node server on **Railway,
-  Fly.io, or a small VPS (e.g. $5 DigitalOcean/Linode)** where SQLite persists
-  in a volume. Point your domain at it. Fully real, zero cloud-DB cost.
-- **Vercel + persistent PostgreSQL:** the code is portable — swap the SQLite
-  `db` layer for `pg`. Because the scope of a real migration is large, I kept a
-  single source of truth (SQLite) and kept every query in `server/db/index.js`
-  so a Postgres adapter is a contained change. On Vercel, also enable
-  **Vercel Postgres** and configure the connection string.
+**How the database survives cold starts:** Vercel functions have an ephemeral
+filesystem, so `db.persist()` writes go to a writable location at runtime but
+the *durable* copy is the one **baked into the deployment**. Every build runs
+`postinstall` → `server/integrations/build-regenerate.js`, which re-syncs the
+shop catalog and bakes today's complete per-country editions into
+`data/worldfront.sqlite`. That regenerated file is shipped with the new
+deployment. Scheduled `crons` in `vercel.json` (plus the free GitHub Actions
+`hourly.yml` fallback) trigger periodic redeploys, so today's data stays in
+production. Details:
 
-### Connect your domain to a Vercel deployment
-1. `npm i -g vercel` → `vercel` (deploy). Create a project and deploy production.
-2. In the **Vercel dashboard → your project → Settings → Domains**:
-   click **Add** and enter `worldfront.news`.
-3. If the domain is registered at another registrar, **add these DNS records** at
-   your registrar's DNS panel (recommended uses Vercel Nameservers for simplicity):
+- `builds` → one `@vercel/node` function from `server/index.js` including
+  `public/`, `data/` and the sql.js WASM binary.
+- `routes` → API, `/sitemap.xml`, `/robots.txt`, static asset folders and every
+  other path all hit the same server function.
+- `crons` → `/api/cron/shop-publish` (midnight), `/api/cron/shop-redeploy`
+  (00:30), `/api/cron/shop-distribute` (04:45). Vercel sends the
+  `x-vercel-cron: 1` header, which `server/index.js` validates.
+- `env` → `SITE_URL` provided automatically; add secrets (news API keys,
+  `HOURLY_CRON_TOKEN`, shop keys, `ADMIN_PASSWORD`) in the Vercel dashboard.
 
-| Type | Name | Value | Notes |
-|------|------|-------|-------|
-| A | `@` | `76.76.21.21` | root -> Vercel |
-| AAAA | `@` | `2606:4700::6810:84e5` | root IPv6 (copy exact value shown in Vercel) |
-| CNAME | `www` | `cname.vercel-dns.com` | www -> Vercel |
+### Automatic deploy on push to GitHub
 
-Alternatively, set **custom nameservers** to Vercel (`ns1.vercel-dns.com`,
-`ns2.vercel-dns.com`, `ns3.vercel-dns.com`) and Vercel auto-provisions DNS.
-After records propagate, enable **HTTPS** (Vercel provides the certificate
-automatically once the CNAME/A records resolve).
+1. **Push this repository to GitHub** (it's already a git repo).
+2. In the **Vercel dashboard → Add New → Project**, import the GitHub repo
+   (Vercel's GitHub app grants access; it's the same GitHub account that holds
+   the repository). Vercel auto-detects the framework settings from
+   `package.json` + `vercel.json` — no build command override needed.
+3. Add the project environment variables in
+   **Settings → Environment Variables** (same keys as `.env.example`):
+   `SITE_URL`, `ADMIN_PASSWORD`, `HOURLY_CRON_TOKEN`, news API keys, and the
+   Weverse shop keys.
+4. Every **`git push` to `main` now auto-deploys** previews (every branch) and
+   production (default branch). No GitHub Actions file is required for the
+   deploy itself.
+5. Attach your domain in **Settings → Domains → Add `worldfront.news` +
+   `www.worldfront.news`**:
+   Vercel shows the exact DNS records to create at your registrar. Because the
+   domain is on Cloudflare's DNS right now, **either** switch the name servers
+   to Vercel (`ns1.vercel-dns.com`, `ns2.vercel-dns.com`, `ns3.vercel-dns.com`)
+   **or** keep Cloudflare and add a proxied CNAME `www` →
+   `cname.vercel-dns.com` plus an A record for the apex pointing at
+   `76.76.21.21` (copy the exact values Vercel shows on the Domains page).
+6. HTTPS is automatic once records resolve. The app redirects
+   `worldfront.news` → `www.worldfront.news` (SITE_URL stays the single source
+   of truth for canonical URLs).
 
-> Each Vercel project shows its exact intended A/AAAA/CNAME values on the
-> Domains page — copy those instead of hardcoding, as they can change per region.
+### First deploy from an existing database
+
+`data/worldfront.sqlite` is **gitignored**, so a fresh Git-triggered build has
+no DB. `build-regenerate.js` handles that: it runs the standard seed (196
+countries, categories, sources, default admin) first, then syncs the shop, so
+the first build ships a complete site instead of failing. To carry your **full**
+local database into the very first production deploy, run a `vercel` CLI
+deploy from the machine that has the file:
+
+```bash
+npm i -g vercel
+vercel --prod     # uploads the tree INCLUDING data/worldfront.sqlite
+```
+
+After that, normal Git-triggered deploys continue from the baked-in snapshot
+and the daily regenerate loop.
 
 ---
 
