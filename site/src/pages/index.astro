@@ -1,0 +1,51 @@
+---
+// Front page — 15 most recent articles, server-rendered, pure HTML.
+import { desc } from 'drizzle-orm';
+import { configureTursoFromRuntime, getDb } from '../db/client';
+import { articles } from '../db/schema';
+
+configureTursoFromRuntime(Astro.locals.runtime?.env);
+const db = getDb();
+
+const latest = await db
+  .select({
+    slug: articles.slug,
+    title: articles.title,
+    category: articles.category,
+    published_at: articles.published_at,
+    featured_image: articles.featured_image,
+    author: articles.author
+  })
+  .from(articles)
+  .orderBy(desc(articles.published_at))
+  .limit(15);
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WorldFront.News — trusted news from every country in the world</title>
+    <meta name="description" content="WorldFront.News — real news from every corner of the world." />
+  </head>
+  <body>
+    <h1>WorldFront.News</h1>
+    <p>Latest stories — every headline is server-rendered, no JavaScript required.</p>
+
+    <ul style="list-style:none;padding:0">
+      {
+        latest.map((a) => (
+          <li style="margin-bottom:1.25rem">
+            <a href={`/news/${a.slug}`}>
+              {a.featured_image ? <img src={a.featured_image} alt="" width="240" height="126" loading="lazy" /> : null}
+              <h2 style="margin:.25rem 0" >{a.title}</h2>
+            </a>
+            <p style="color:#555;font-size:.85rem;margin:0">
+              {a.category} · {a.published_at.toDateString()}
+            </p>
+          </li>
+        ))
+      }
+    </ul>
+  </body>
+</html>
