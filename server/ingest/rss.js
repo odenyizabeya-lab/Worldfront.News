@@ -179,12 +179,14 @@ function mapItem(item, source) {
   };
 }
 
-async function fetchOne(source) {
+async function fetchOne(source, opts = {}) {
   try {
     const feed = await parser.parseURL(source.feed_url);
     let inserted = 0;
     let ogFetches = 0;
-    const ogBudget = 8; // don't crawl a whole feed's pages in one pass
+    // Skip per-article page crawling when requested (e.g. build-time ingest
+    // where the whole feed set must fit inside the deployment build window).
+    const ogBudget = opts.skipOg ? 0 : 8;
     for (const item of feed.items.slice(0, 25)) {
       const row = mapItem(item, source);
       if (!row) continue;
@@ -221,7 +223,7 @@ async function fetchOne(source) {
   }
 }
 
-async function fetchEnabled(limit = null) {
+async function fetchEnabled(limit = null, opts = {}) {
   await db.ready();
   let sql = 'SELECT * FROM news_sources WHERE enabled=1';
   const params = [];
@@ -234,7 +236,7 @@ async function fetchEnabled(limit = null) {
   const concurrency = 10;
   for (let i = 0; i < sources.length; i += concurrency) {
     const batch = sources.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map(s => fetchOne(s)));
+    const batchResults = await Promise.all(batch.map(s => fetchOne(s, opts)));
     results.push(...batchResults);
     if (i + concurrency < sources.length) await sleep(500);
   }

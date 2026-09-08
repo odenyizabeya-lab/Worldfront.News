@@ -27,7 +27,8 @@ const { execFileSync } = require('child_process');
 async function main() {
   const dataDir = path.join(__dirname, '..', '..', 'data');
   const dbFile = path.join(dataDir, 'worldfront.sqlite');
-  if (!fs.existsSync(dbFile)) {
+  const hadDb = fs.existsSync(dbFile);
+  if (!hadDb) {
     console.log('[build-regenerate] no bundled DB present — running a fresh seed so this build ships a working site');
     try {
       const node = process.execPath;
@@ -63,6 +64,21 @@ async function main() {
     console.log(`[build-regenerate] international product pages: ${inl.pairs} pairs (${inl.created} new, ${inl.updated} refreshed, ${inl.unchanged} unchanged) across ${inl.countries} countries`);
   } catch (e) {
     console.log('[build-regenerate] international pages skipped:', e.message);
+  }
+  // Fresh git builds ship with an empty news table (data/worldfront.sqlite is
+  // gitignored), so ingest a fresh batch of headlines here. Local installs that
+  // already have a populated DB skip this and keep their existing articles.
+  if (!hadDb) {
+    try {
+      const { fetchEnabled } = require('../ingest/rss');
+      const { runApiProviders } = require('../ingest/api');
+      const rss = await fetchEnabled(null, { skipOg: true });
+      const api = await runApiProviders();
+      const ok = rss.filter((r) => !r.error).length;
+      console.log(`[build-regenerate] news ingest: ${ok}/${rss.length} feeds OK, api=${api.total}`);
+    } catch (e) {
+      console.log('[build-regenerate] news ingest skipped:', e.message);
+    }
   }
   db.persist();
   console.log('[build-regenerate] bundled DB regenerated:', dbFile, '(' + Math.round(fs.statSync(dbFile).size / 1024 / 1024) + ' MB)');
