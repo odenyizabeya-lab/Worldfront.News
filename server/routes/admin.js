@@ -167,8 +167,10 @@ router.post('/site-articles', (req, res) => {
      b.featured ? 1 : 0, b.breaking ? 1 : 0, b.status || 'published',
      b.published_at || db.now(), db.now()]
   );
+  // Read the rowid before persist() (sql.js export() resets last_insert_rowid()).
+  const id = db.get('SELECT last_insert_rowid() AS id').id;
   db.persist();
-  res.json({ ok: true, id: db.get('SELECT last_insert_rowid() AS id').id, slug });
+  res.json({ ok: true, id, slug });
 });
 
 router.put('/site-articles/:id', (req, res) => {

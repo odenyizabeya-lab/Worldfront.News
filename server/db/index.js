@@ -561,6 +561,129 @@ async function initialize() {
     done_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_dist_tasks_status ON dist_tasks(status);
+
+  -- =====================================================================
+  -- SOCIAL MEDIA AUTOMATION (WorldFront.News — KCO Global Marketplace)
+  -- Automatic + manual social media publishing system.
+  -- All credentials stored server-side only, encrypted when possible.
+  -- =====================================================================
+  CREATE TABLE IF NOT EXISTS social_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    platform_user_id TEXT,
+    account_name TEXT,
+    account_label TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    token_expires_at INTEGER,
+    token_type TEXT DEFAULT 'bearer',
+    scope TEXT,
+    page_id TEXT,
+    page_name TEXT,
+    webhook_url TEXT,
+    avatar_url TEXT,
+    connected INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    last_post_at INTEGER,
+    last_error TEXT,
+    created_at INTEGER,
+    updated_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_social_accounts_platform ON social_accounts(platform);
+
+  CREATE TABLE IF NOT EXISTS posting_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER,
+    enabled INTEGER DEFAULT 1,
+    content_types TEXT DEFAULT '["articles","products","site_articles"]',
+    frequency TEXT DEFAULT 'daily',
+    time_of_day TEXT DEFAULT '09:00',
+    day_of_week TEXT DEFAULT '*',
+    day_of_month INTEGER,
+    max_posts_per_day INTEGER DEFAULT 3,
+    require_approval INTEGER DEFAULT 0,
+    auto_select INTEGER DEFAULT 1,
+    include_image INTEGER DEFAULT 1,
+    include_link INTEGER DEFAULT 1,
+    hashtag_template TEXT,
+    caption_template TEXT,
+    exclude_ids TEXT DEFAULT '[]',
+    created_at INTEGER,
+    updated_at INTEGER,
+    FOREIGN KEY (account_id) REFERENCES social_accounts(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_posting_rules_account ON posting_rules(account_id);
+
+  CREATE TABLE IF NOT EXISTS social_posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER,
+    content_type TEXT NOT NULL,
+    content_id INTEGER,
+    content_url TEXT,
+    content_title TEXT,
+    content_summary TEXT,
+    content_image TEXT,
+    custom_caption TEXT,
+    custom_hashtags TEXT,
+    media_url TEXT,
+    media_type TEXT DEFAULT 'image',
+    platform_post_id TEXT,
+    platform_url TEXT,
+    post_type TEXT DEFAULT 'automatic',
+    status TEXT DEFAULT 'pending',
+    scheduled_at INTEGER,
+    published_at INTEGER,
+    failed_at INTEGER,
+    failed_reason TEXT,
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3,
+    next_retry_at INTEGER,
+    idempotency_key TEXT,
+    created_at INTEGER,
+    FOREIGN KEY (account_id) REFERENCES social_accounts(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_social_posts_status ON social_posts(status);
+  CREATE INDEX IF NOT EXISTS idx_social_posts_scheduled ON social_posts(scheduled_at);
+  CREATE INDEX IF NOT EXISTS idx_social_posts_account ON social_posts(account_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_social_posts_idempotency ON social_posts(idempotency_key);
+
+  CREATE TABLE IF NOT EXISTS social_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER,
+    post_id INTEGER,
+    position INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'queued',
+    created_at INTEGER,
+    FOREIGN KEY (account_id) REFERENCES social_accounts(id),
+    FOREIGN KEY (post_id) REFERENCES social_posts(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_social_queue_status ON social_queue(status);
+
+  CREATE TABLE IF NOT EXISTS social_post_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER,
+    account_id INTEGER,
+    platform TEXT,
+    action TEXT,
+    status TEXT,
+    http_status INTEGER,
+    message TEXT,
+    response_data TEXT,
+    attempted_at INTEGER,
+    FOREIGN KEY (post_id) REFERENCES social_posts(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_social_post_log_post ON social_post_log(post_id);
+  CREATE INDEX IF NOT EXISTS idx_social_post_log_attempt ON social_post_log(attempted_at);
+
+  CREATE TABLE IF NOT EXISTS social_likes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER,
+    platform_post_id TEXT,
+    content_url TEXT,
+    liked_at INTEGER,
+    FOREIGN KEY (account_id) REFERENCES social_accounts(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_social_likes_account ON social_likes(account_id);
   `;
 
   db.run(schema);

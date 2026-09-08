@@ -78,6 +78,7 @@ WF.views.admin = async function (app) {
       '<a class="chip" href="#/admin/seo">SEO</a>' +
       '<a class="chip" href="#/admin/locations">Locations</a>' +
       '<a class="chip" href="#/admin/distribution">Distribution</a>' +
+      '<a class="chip" href="#/admin/social">Social Media</a>' +
       '<a class="chip" href="#/admin/account">Account</a>' +
     '</div>' +
     '<div class="grid grid-4"><div class="card" id="st_articles"></div><div class="card" id="st_sources"></div><div class="card" id="st_users"></div><div class="card" id="st_breaking"></div></div>' +
@@ -836,4 +837,617 @@ WF.views.adminAccount = async function (app) {
     } catch (e) { WF.toast(e.message); }
     b.disabled = false; b.textContent = 'Save password';
   });
+};
+
+// =====================================================================
+// SOCIAL MEDIA AUTOMATION — KCO Global Online Marketplace
+// Automatic posting (primary) + manual posting (secondary)
+// =====================================================================
+
+// ----- Social Media Overview -----
+WF.views.adminSocial = async function (app) {
+  if (!adminGuard()) { WF.router.go('/admin'); return; }
+  setMeta('Social Media', 'Social media automation overview');
+  app.innerHTML = '<div class="page-title">📱 Social Media Automation</div><a class="see-all" href="#/admin">← Dashboard</a>' +
+    '<div class="chip-row">' +
+      '<a class="chip" href="#/admin/social/accounts">Connected Accounts</a>' +
+      '<a class="chip" href="#/admin/social/auto">Automatic Posting</a>' +
+      '<a class="chip" href="#/admin/social/compose">Manual Posting</a>' +
+      '<a class="chip" href="#/admin/social/queue">Content Queue</a>' +
+      '<a class="chip" href="#/admin/social/logs">Post Logs</a>' +
+    '</div>' +
+    '<div class="grid grid-4" id="soc_cards"></div>' +
+    '<div class="card" style="margin-top:14px"><h3>Automation Control</h3>' +
+    '<div id="soc_autopause" style="margin-bottom:10px">Checking…</div>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary" id="soc_runScheduler" style="background:#0a7d3c">Run scheduler now</button>' +
+    '<button class="btn btn-outline" id="soc_pause">Pause all automation</button>' +
+    '<button class="btn btn-outline" id="soc_resume">Resume automation</button>' +
+    '</div></div>' +
+    '<div class="card" style="margin-top:14px"><h3>Upcoming Scheduled Posts</h3><div id="soc_upcoming" class="muted">Loading…</div></div>' +
+    '<div class="card" style="margin-top:14px"><h3>Recent Posts</h3><div id="soc_recent" class="muted">Loading…</div></div>' +
+    '<div class="card" style="margin-top:14px"><h3>Recent Post Log</h3><div id="soc_log" class="muted">Loading…</div></div>';
+
+  loadSocialOverview();
+  loadSocialRecent();
+  loadSocialLog();
+  loadSocialControls();
+
+  document.getElementById('soc_pause').addEventListener('click', async () => {
+    await WF.api('/social/scheduler/pause', { method: 'POST' });
+    WF.toast('Automation paused'); loadSocialControls();
+  });
+  document.getElementById('soc_resume').addEventListener('click', async () => {
+    await WF.api('/social/scheduler/resume', { method: 'POST' });
+    WF.toast('Automation resumed'); loadSocialControls();
+  });
+  document.getElementById('soc_runScheduler').addEventListener('click', async () => {
+    const b = document.getElementById('soc_runScheduler');
+    b.disabled = true; b.textContent = 'Running…';
+    try {
+      const d = await WF.api('/social/scheduler/run', { method: 'POST' });
+      const r = d.result || {};
+      WF.toast('Scheduler done: published=' + r.posts_published + ' created=' + r.posts_created + ' failed=' + r.posts_failed + ' retries=' + r.retries);
+      loadSocialOverview(); loadSocialRecent(); loadSocialLog();
+    } catch (e) { WF.toast(e.message); }
+    b.disabled = false; b.textContent = 'Run scheduler now';
+  });
+
+  async function loadSocialOverview() {
+    try {
+      const s = await WF.api('/social/stats');
+      const el = document.getElementById('soc_cards');
+      if (!el) return;
+      el.innerHTML =
+        '<div class="card"><h3>Accounts</h3><div class="page-title" style="font-size:1.5rem;margin:4px 0">' + s.accounts.connected + ' connected</div><div class="muted" style="font-size:.8rem">' + s.accounts.total + ' total · ' + s.accounts.enabled + ' enabled</div></div>' +
+        '<div class="card"><h3>Posts</h3><div class="page-title" style="font-size:1.5rem;margin:4px 0">' + s.posts.published + ' published</div><div class="muted" style="font-size:.8rem">' + s.posts.queued + ' queued · ' + s.posts.failed + ' failed</div></div>' +
+        '<div class="card"><h3>Today</h3><div class="page-title" style="font-size:1.5rem;margin:4px 0">' + s.posts.today_published + ' posted</div><div class="muted" style="font-size:.8rem">' + s.posts.today_failed + ' failed today</div></div>' +
+        '<div class="card"><h3>Rules</h3><div class="page-title" style="font-size:1.5rem;margin:4px 0">' + s.rules.enabled + ' active</div><div class="muted" style="font-size:.8rem">' + s.rules.total + ' total rules</div></div>';
+    } catch (e) {
+      document.getElementById('soc_cards').innerHTML = '<p class="muted">Could not load overview.</p>';
+    }
+  }
+
+  async function loadSocialControls() {
+    try {
+      const s = await WF.api('/social/stats');
+      const el = document.getElementById('soc_autopause');
+      const paused = s.automation_paused;
+      const lastRun = s.last_run && s.last_run.value ? new Date(+s.last_run.value * 1000).toLocaleString() : 'never';
+      el.innerHTML = paused
+        ? '<span class="pill" style="background:#d40000">PAUSED</span> — Automatic posting is paused. Click "Resume automation" to continue.'
+        : '<span class="pill" style="background:#1a7f37">ACTIVE</span> — Automatic posting is running. Last scheduler run: ' + lastRun;
+    } catch (e) {}
+  }
+
+  async function loadSocialRecent() {
+    const el = document.getElementById('soc_recent');
+    try {
+      const d = await WF.api('/social/posts?limit=10');
+      const posts = (d.posts || []).slice(0, 10);
+      el.innerHTML = posts.length
+        ? posts.map(p => '<div class="list-item"><div style="flex:1"><strong>' + WF.esc(p.content_title || p.content_url || 'Post ' + p.id) + '</strong>' +
+          '<div class="muted" style="font-size:.75rem">' + WF.esc(p.platform || '') + ' · ' + WF.esc(p.content_type || '') + ' · ' + WF.esc(p.post_type || '') + '</div></div>' +
+          '<span class="pill" style="background:' + (p.status === 'published' ? '#1a7f37' : p.status === 'failed' ? '#d40000' : p.status === 'queued' || p.status === 'scheduled' ? '#1f6feb' : '#c77700') + '">' + WF.esc(p.status) + '</span></div>').join('')
+        : '<p class="muted">No posts yet.</p>';
+    } catch (e) { el.innerHTML = '<p class="muted">Could not load posts.</p>'; }
+  }
+
+  async function loadSocialLog() {
+    const el = document.getElementById('soc_log');
+    try {
+      const d = await WF.api('/social/logs?limit=15');
+      const logs = (d.logs || []).slice(0, 15);
+      el.innerHTML = logs.length
+        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>When</th><th>Platform</th><th>Action</th><th>Status</th><th>Message</th></tr></thead><tbody>' +
+          logs.map(l => '<tr><td class="muted" style="font-size:.72rem">' + new Date(l.attempted_at * 1000).toISOString().slice(0, 16) + '</td>' +
+            '<td>' + WF.esc(l.platform || '') + '</td>' +
+            '<td class="muted">' + WF.esc(l.action || '') + '</td>' +
+            '<td><span class="pill" style="background:' + (l.status === 'ok' ? '#1a7f37' : '#d40000') + '">' + WF.esc(l.status) + '</span></td>' +
+            '<td class="muted" style="font-size:.75rem;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + WF.esc(l.message || '') + '</td></tr>').join('') +
+          '</tbody></table></div>'
+        : '<p class="muted">No activity logged yet.</p>';
+    } catch (e) { el.innerHTML = '<p class="muted">Could not load log.</p>'; }
+  }
+
+  async function loadUpcoming() {
+    const el = document.getElementById('soc_upcoming');
+    try {
+      const d = await WF.api('/social/scheduler/next');
+      if (d.next) {
+        const n = d.next;
+        el.innerHTML = '<div class="list-item"><div style="flex:1"><strong>' + WF.esc(n.content_title || n.content_url || '') + '</strong>' +
+          '<div class="muted">' + WF.esc(n.platform || '') + ' · scheduled ' + new Date(n.scheduled_at * 1000).toLocaleString() + '</div></div>' +
+          '<span class="pill" style="background:#1f6feb">' + WF.esc(n.status) + '</span></div>';
+      } else {
+        el.innerHTML = '<p class="muted">No upcoming scheduled posts.</p>';
+      }
+    } catch (e) { el.innerHTML = '<p class="muted">Could not load.</p>'; }
+  }
+  loadUpcoming();
+};
+
+// ----- Connected Accounts -----
+WF.views.adminSocialAccounts = async function (app) {
+  if (!adminGuard()) { WF.router.go('/admin/social'); return; }
+  setMeta('Connected Accounts', 'Manage social media connections');
+  app.innerHTML = '<div class="page-title">🔌 Connected Accounts</div><a class="see-all" href="#/admin/social">← Social</a>' +
+    '<div class="card" style="margin-top:12px"><h3>Connect a new platform</h3>' +
+    '<p class="muted" style="font-size:.9rem">Connect your official accounts through each platform\'s approved API. No passwords are ever requested.</p>' +
+    '<div id="soc_platformList"></div></div>' +
+    '<div class="card" style="margin-top:16px"><h3>Your Connected Accounts</h3><div id="soc_accounts"></div></div>';
+
+  loadPlatforms();
+  loadAccounts();
+
+  async function loadPlatforms() {
+    const el = document.getElementById('soc_platformList');
+    try {
+      const d = await WF.api('/social/platforms');
+      el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Platform</th><th>Content</th><th>Requirements</th><th>Action</th></tr></thead><tbody>' +
+        d.platforms.map(p => {
+          const reqBadges = [];
+          if (p.requires_app_review) reqBadges.push('<span class="pill" style="background:#c77700">app review</span>');
+          if (p.requires_paid) reqBadges.push('<span class="pill" style="background:#d40000">paid plan</span>');
+          if (p.max_caption) reqBadges.push('<span class="pill">' + p.max_caption + ' chars</span>');
+          return '<tr><td><strong>' + WF.esc(p.name) + '</strong></td>' +
+            '<td class="muted" style="font-size:.75rem">' + (p.content_types || []).join(', ') + '</td>' +
+            '<td>' + reqBadges.join(' ') + '</td>' +
+            '<td><button class="btn btn-sm btn-primary" data-conn="' + p.slug + '">Connect</button></td></tr>';
+        }).join('') +
+        '</tbody></table></div>';
+
+      el.querySelectorAll('[data-conn]').forEach(b => b.addEventListener('click', () => connectModal(b.dataset.conn, d.platforms.find(x => x.slug === b.dataset.conn))));
+    } catch (e) {
+      el.innerHTML = '<p class="muted">Could not load platforms.</p>';
+    }
+  }
+
+  async function loadAccounts() {
+    const el = document.getElementById('soc_accounts');
+    try {
+      const d = await WF.api('/social/accounts');
+      const accounts = d.accounts || [];
+      el.innerHTML = accounts.length
+        ? accounts.map(a => {
+            const statusBadge = !a.connected ? '<span class="pill" style="background:#555">disconnected</span>'
+              : a.enabled ? '<span class="pill" style="background:#1a7f37">connected</span>'
+              : '<span class="pill" style="background:#c77700">disabled</span>';
+            const tokenBadge = a.token_valid ? '' : '<span class="pill" style="background:#d40000">token expired</span>';
+            return '<div class="list-item"><div style="flex:1">' +
+              '<strong>' + WF.esc(a.account_label || a.account_name || a.platform) + '</strong> ' +
+              '<span class="muted">(' + WF.esc(a.platform_info || a.platform) + ')</span>' + statusBadge + tokenBadge +
+              '<div class="muted" style="font-size:.75rem">' + a.total_posts + ' posts · ' + a.queued_posts + ' queued · ' + a.posting_rules_count + ' rules' +
+              (a.last_error ? ' · <span style="color:#d40000">' + WF.esc(a.last_error) + '</span>' : '') + '</div></div>' +
+              (a.connected ? '<button class="btn btn-sm btn-outline" data-tog="' + a.id + '" data-en="' + a.enabled + '">' + (a.enabled ? 'Disable' : 'Enable') + '</button>' : '') +
+              '<button class="btn btn-sm btn-danger" data-disc="' + a.id + '" data-conn="' + (a.connected ? '1' : '0') + '">' + (a.connected ? 'Disconnect' : 'Remove') + '</button></div>';
+          }).join('')
+        : '<p class="muted">No accounts connected yet. Use the table above to connect.</p>';
+
+      el.querySelectorAll('[data-tog]').forEach(b => b.addEventListener('click', async () => {
+        await WF.api('/social/accounts/' + b.dataset.tog + '/toggle', { method: 'POST' });
+        loadAccounts();
+      }));
+      el.querySelectorAll('[data-disc]').forEach(b => b.addEventListener('click', async () => {
+        const connected = b.dataset.conn === '1';
+        if (!confirm(connected ? 'Disconnect this account?' : 'Remove this account record?')) return;
+        if (connected) {
+          await WF.api('/social/accounts/disconnect', { method: 'POST', body: JSON.stringify({ account_id: +b.dataset.disc }) });
+        } else {
+          await WF.api('/social/accounts/' + b.dataset.disc, { method: 'DELETE' });
+        }
+        WF.toast(connected ? 'Disconnected' : 'Removed');
+        loadAccounts();
+      }));
+    } catch (e) {
+      el.innerHTML = '<p class="muted">Could not load accounts.</p>';
+    }
+  }
+
+  function connectModal(slug, p) {
+    if (!p) return;
+    const isOAuth = !p.no_oauth;
+    let body;
+    if (isOAuth) {
+      body = '<div class="card"><h3>Connect — ' + WF.esc(p.name) + '</h3>' +
+        '<p class="muted">You will be redirected to ' + WF.esc(p.name) + '\'s official authorization page. ' +
+        'The connection uses the platform\'s official OAuth flow — your password is never requested or stored.</p>' +
+        (p.requires_app_review ? '<div class="muted" style="margin:10px 0;padding:10px;background:rgba(199,119,0,.1);border-radius:8px;color:#c77700">⚠️ ' + WF.esc(p.review_note) + '</div>' : '') +
+        (p.requires_paid ? '<div class="muted" style="margin:10px 0;padding:10px;background:rgba(212,0,0,.1);border-radius:8px;color:#d40000">⚠️ ' + WF.esc(p.paid_note) + '</div>' : '') +
+        '<button class="btn btn-primary" id="sm_connect">Authorize on ' + WF.esc(p.name) + '</button> ' +
+        '<button class="btn btn-outline" id="sm_close">Close</button></div>';
+    } else {
+      const fields = slug === 'telegram'
+        ? '<div class="form-row"><label>Bot token</label><input id="sm_token" placeholder="from @BotFather"></div>' +
+          '<div class="form-row"><label>Channel ID</label><input id="sm_channel" placeholder="@mychannel or -100123456789"></div>'
+        : '<div class="form-row"><label>Webhook URL / Token</label><input id="sm_token" placeholder="' + (slug === 'discord' ? 'https://discord.com/api/webhooks/...' : 'paste token') + '"></div>';
+      body = '<div class="card"><h3>Connect — ' + WF.esc(p.name) + '</h3>' +
+        '<p class="muted" style="font-size:.85rem">' + (p.setup_steps || []).join('<br>') + '</p>' +
+        fields +
+        '<input class="form-row" id="sm_label" placeholder="Label (e.g. Marketing Channel)">' +
+        '<button class="btn btn-primary" id="sm_save">Save connection</button> ' +
+        '<button class="btn btn-outline" id="sm_close">Close</button></div>';
+    }
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(8,8,14,.7);z-index:99;display:flex;align-items:flex-start;justify-content:center;padding:6vh 12px;overflow:auto';
+    modal.innerHTML = '<div style="max-width:560px;width:100%;background:#11101a;border:1px solid #2a2a3d;border-radius:12px;padding:22px">' + body + '</div>';
+    document.body.appendChild(modal);
+    const close = () => modal.remove();
+    modal.querySelector('#sm_close').addEventListener('click', close);
+
+    if (isOAuth) {
+      modal.querySelector('#sm_connect').addEventListener('click', async () => {
+        const b = modal.querySelector('#sm_connect');
+        b.disabled = true; b.textContent = 'Opening authorization…';
+        try {
+          const d = await WF.api('/social/accounts/connect', { method: 'POST', body: JSON.stringify({ platform: slug }) });
+          if (d.auth_url) {
+            window.open(d.auth_url, '_blank', 'width=700,height=650');
+            WF.toast('Authorization window opened. Complete it there, then click "Done" here.');
+            b.textContent = 'Done — connection complete';
+            b.disabled = false;
+          } else {
+            WF.toast(d.error || 'Could not start connection');
+            WF.router.go('/admin/social/accounts');
+            close();
+          }
+        } catch (e) {
+          WF.toast(e.message);
+          close();
+        }
+      });
+    } else {
+      modal.querySelector('#sm_save').addEventListener('click', async () => {
+        try {
+          const token = (document.getElementById('sm_token') || {}).value || '';
+          const channel = (document.getElementById('sm_channel') || {}).value || '';
+          const label = (document.getElementById('sm_label') || {}).value || '';
+          const bodyData = { platform: slug, token, channel_id: channel, label };
+          if (slug === 'discord') bodyData.webhook_url = token;
+          const d = await WF.api('/social/accounts/connect', { method: 'POST', body: JSON.stringify(bodyData) });
+          WF.toast('Connected!');
+          close();
+          loadAccounts(); loadPlatforms();
+        } catch (e) { WF.toast(e.message); }
+      });
+    }
+  }
+};
+
+// ----- Automatic Posting -----
+WF.views.adminSocialAuto = async function (app) {
+  if (!adminGuard()) { WF.router.go('/admin/social'); return; }
+  setMeta('Automatic Posting', 'Automatic social media posting controls');
+  app.innerHTML = '<div class="page-title">⚡ Automatic Posting</div><a class="see-all" href="#/admin/social">← Social</a>' +
+    '<p class="muted">Set up rules that automatically publish your newest articles, products, and news to your connected social accounts — even while you are offline. The scheduler runs on the server via cron.</p>' +
+    '<div class="card" style="margin-top:14px"><h3>New Posting Rule</h3>' +
+    '<div class="form-row"><label>Account</label><select id="rule_account"><option value="">Loading accounts…</option></select></div>' +
+    '<div class="form-row"><label>Content types</label><div style="display:flex;gap:12px;flex-wrap:wrap" id="rule_types">' +
+    '<label><input type="checkbox" value="articles" checked> News Articles</label>' +
+    '<label><input type="checkbox" value="site_articles"> Site Articles</label>' +
+    '<label><input type="checkbox" value="products"> Products</label>' +
+    '<label><input type="checkbox" value="breaking"> Breaking News</label>' +
+    '</div></div>' +
+    '<div class="form-row" style="display:flex;gap:12px;flex-wrap:wrap">' +
+    '<div style="flex:1"><label>Frequency</label><select id="rule_freq"><option value="hourly">Hourly</option><option value="daily" selected>Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>' +
+    '<div style="flex:1"><label>Time of day (24h)</label><input type="time" id="rule_time" value="09:00"></div>' +
+    '<div style="display:none;flex:1" id="rule_dowWrapper"><label>Day of week</label><select id="rule_dow"><option value="*">Every day</option><option value="mon">Monday</option><option value="tue">Tuesday</option><option value="wed">Wednesday</option><option value="thu">Thursday</option><option value="fri">Friday</option><option value="sat">Saturday</option><option value="sun">Sunday</option></select></div>' +
+    '<div style="display:none;flex:1" id="rule_domWrapper"><label>Day of month (1-31)</label><input type="number" id="rule_dom" min="1" max="31" value="1"></div>' +
+    '<div style="flex:1"><label>Max posts per day</label><input type="number" id="rule_max" value="3" min="1" max="50"></div>' +
+    '</div>' +
+    '<div class="form-row" style="display:flex;gap:12px;flex-wrap:wrap">' +
+    '<label><input type="checkbox" id="rule_approval"> Require approval before publishing</label>' +
+    '<label><input type="checkbox" id="rule_link" checked> Include link</label>' +
+    '<label><input type="checkbox" id="rule_image" checked> Include image</label>' +
+    '</div>' +
+    '<div class="form-row"><label>Hashtag template (comma separated)</label><input id="rule_tags" placeholder="worldfront, news, tech, #kco"></div>' +
+    '<div class="form-row"><label>Caption template (use {title} {url} {summary})</label><textarea id="rule_caption" rows="3" placeholder="Check out {title} at {url}"></textarea></div>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary" id="rule_add">Create Rule</button>' +
+    '</div></div>' +
+    '<div id="rule_list" class="card" style="margin-top:16px"><h3>Active Rules</h3><p class="muted">Loading…</p></div>';
+
+  loadAccounts();
+  loadRules();
+
+  const freq = document.getElementById('rule_freq');
+  freq.addEventListener('change', () => {
+    document.getElementById('rule_dowWrapper').style.display = freq.value === 'weekly' ? 'block' : 'none';
+    document.getElementById('rule_domWrapper').style.display = freq.value === 'monthly' ? 'block' : 'none';
+  });
+
+  async function loadAccounts() {
+    try {
+      const d = await WF.api('/social/accounts');
+      const accounts = (d.accounts || []).filter(a => a.connected && a.enabled);
+      document.getElementById('rule_account').innerHTML = accounts.length
+        ? accounts.map(a => '<option value="' + a.id + '">' + WF.esc(a.account_label || a.account_name || a.platform) + ' (' + WF.esc(a.platform_info || a.platform) + ')</option>').join('')
+        : '<option value="">No connected accounts — connect first</option>';
+    } catch (e) {}
+  }
+
+  document.getElementById('rule_add').addEventListener('click', async () => {
+    const accountId = document.getElementById('rule_account').value;
+    if (!accountId) { WF.toast('Select an account first'); return; }
+
+    const types = [];
+    document.querySelectorAll('#rule_types input:checked').forEach(c => types.push(c.value));
+    if (!types.length) { WF.toast('Select at least one content type'); return; }
+
+    const body = {
+      account_id: +accountId,
+      content_types: types,
+      frequency: document.getElementById('rule_freq').value,
+      time_of_day: document.getElementById('rule_time').value,
+      day_of_week: document.getElementById('rule_dow').value,
+      day_of_month: document.getElementById('rule_freq').value === 'monthly' ? +document.getElementById('rule_dom').value || 1 : null,
+      max_posts_per_day: +document.getElementById('rule_max').value || 3,
+      require_approval: document.getElementById('rule_approval').checked,
+      include_link: document.getElementById('rule_link').checked,
+      include_image: document.getElementById('rule_image').checked,
+      hashtag_template: document.getElementById('rule_tags').value,
+      caption_template: document.getElementById('rule_caption').value
+    };
+
+    try {
+      await WF.api('/social/rules', { method: 'POST', body: JSON.stringify(body) });
+      WF.toast('Rule created');
+      loadRules();
+    } catch (e) { WF.toast(e.message); }
+  });
+
+  async function loadRules() {
+    const el = document.getElementById('rule_list');
+    try {
+      const d = await WF.api('/social/rules');
+      const rules = d.rules || [];
+      el.innerHTML = '<h3>Posting Rules</h3>' + (rules.length
+        ? rules.map(r => {
+            let types = [];
+            try { types = JSON.parse(r.content_types); } catch (e) {}
+            return '<div class="list-item" style="flex-wrap:wrap"><div style="flex:1;min-width:220px">' +
+              (r.enabled ? '<span class="pill" style="background:#1a7f37">on</span>' : '<span class="pill" style="background:#555">off</span>') +
+              ' <strong>' + WF.esc(r.account_label || r.account_name || r.platform) + '</strong>' +
+              '<div class="muted" style="font-size:.75rem">' + types.join(', ') + ' · ' + WF.esc(r.frequency) + ' at ' + WF.esc(r.time_of_day) + (r.frequency === 'monthly' && r.day_of_month ? ' on day ' + r.day_of_month : '') + ' · max ' + r.max_posts_per_day + '/day' +
+              (r.require_approval ? ' · approval' : '') + '</div></div>' +
+              '<button class="btn btn-sm btn-outline" data-tog="' + r.id + '" data-en="' + r.enabled + '">' + (r.enabled ? 'Pause' : 'Enable') + '</button>' +
+              '<button class="btn btn-sm btn-danger" data-del="' + r.id + '">Delete</button></div>';
+          }).join('')
+        : '<p class="muted">No rules yet. Create one above.</p>');
+
+      el.querySelectorAll('[data-tog]').forEach(b => b.addEventListener('click', async () => {
+        await WF.api('/social/rules/' + b.dataset.tog + '/toggle', { method: 'POST' });
+        WF.toast('Rule ' + (b.dataset.en === '1' ? 'paused' : 'enabled'));
+        loadRules();
+      }));
+      el.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this posting rule?')) return;
+        await WF.api('/social/rules/' + b.dataset.del, { method: 'DELETE' });
+        loadRules();
+      }));
+    } catch (e) { el.innerHTML = '<p class="muted">Could not load rules.</p>'; }
+  }
+};
+
+// ----- Manual Posting (Compose) -----
+WF.views.adminSocialCompose = async function (app) {
+  if (!adminGuard()) { WF.router.go('/admin/social'); return; }
+  setMeta('Manual Posting', 'Create and publish social media posts manually');
+  app.innerHTML = '<div class="page-title">✍️ Manual Posting</div><a class="see-all" href="#/admin/social">← Social</a>' +
+    '<p class="muted">Select content, write your caption, choose a platform, and publish immediately or schedule it.</p>' +
+    '<div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="manualGrid">' +
+    '<div class="card"><h3>1. Select Content</h3>' +
+    '<div class="form-row"><select id="mp_contentType"><option value="articles">News Articles</option><option value="site_articles">Site Articles</option><option value="products">Products</option><option value="breaking">Breaking News</option></select></div>' +
+    '<div id="mp_contentList" class="muted" style="font-size:.85rem;max-height:320px;overflow-y:auto">Loading…</div></div>' +
+    '<div class="card"><h3>2. Compose Post</h3>' +
+    '<div class="form-row"><label>Account</label><select id="mp_account"><option value="">Loading…</option></select></div>' +
+    '<div class="form-row"><label>Caption</label><textarea id="mp_caption" rows="4" placeholder="Write your post caption…"></textarea></div>' +
+    '<div class="form-row"><label>Hashtags</label><input id="mp_tags" placeholder="e.g. news, world, #kco"></div>' +
+    '<div class="form-row"><label>Image / Video URL (optional)</label><input id="mp_media" placeholder="https://…"></div>' +
+    '<div class="form-row"><label>Schedule (optional — blank = publish immediately)</label><input type="datetime-local" id="mp_schedule"></div>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary" id="mp_publish">Publish Now</button>' +
+    '<button class="btn btn-outline" id="mp_scheduleBtn">Schedule</button>' +
+    '<button class="btn btn-outline" id="mp_draft">Save Draft</button>' +
+    '</div></div></div>' +
+    '<div class="card" style="margin-top:16px"><h3>Preview</h3><div id="mp_preview" class="muted">Select content to preview…</div></div>';
+
+  loadManualAccounts();
+  loadContent('articles');
+
+  document.getElementById('mp_contentType').addEventListener('change', (e) => loadContent(e.target.value));
+
+  async function loadContent(type) {
+    const el = document.getElementById('mp_contentList');
+    try {
+      const d = await WF.api('/social/content/available');
+      const all = d.content || [];
+      const filtered = all.filter(c => c.content_type === type);
+      el.innerHTML = filtered.length
+        ? filtered.map(c => '<div class="list-item" data-pick="' + encodeURIComponent(JSON.stringify(c)) + '" style="cursor:pointer"><div style="flex:1"><strong>' + WF.esc(c.content_title || '') + '</strong>' +
+          '<div class="muted" style="font-size:.72rem">' + WF.esc((c.content_url || '').slice(0, 80)) + '</div></div>' +
+          '<span class="pill">' + WF.esc(c.type_label || type) + '</span></div>').join('')
+        : '<p class="muted">No ' + type + ' content available.</p>';
+
+      el.querySelectorAll('[data-pick]').forEach(item => item.addEventListener('click', () => {
+        const c = JSON.parse(decodeURIComponent(item.dataset.pick));
+        document.getElementById('mp_caption').value = c.content_title || '';
+        document.getElementById('mp_tags').value = '';
+        document.getElementById('mp_media').value = c.content_image || '';
+        window._mpContent = c;
+        document.getElementById('mp_preview').innerHTML = '<div><img src="' + WF.esc(c.content_image) + '" style="max-height:120px;border-radius:8px;margin-bottom:8px" onerror="this.style.display=\'none\'"><strong>' + WF.esc(c.content_title || '') + '</strong>' +
+          '<div class="muted" style="font-size:.85rem">' + WF.esc((c.content_summary || '').slice(0, 150)) + '</div>' +
+          '<a href="' + WF.esc(c.content_url) + '" target="_blank" rel="noopener" style="font-size:.85rem">' + WF.esc((c.content_url || '').slice(0, 80)) + '</a></div>';
+      }));
+    } catch (e) { el.innerHTML = '<p class="muted">Could not load content.</p>'; }
+  }
+
+  async function loadManualAccounts() {
+    try {
+      const d = await WF.api('/social/accounts');
+      const accounts = (d.accounts || []).filter(a => a.connected);
+      document.getElementById('mp_account').innerHTML = accounts.length
+        ? accounts.map(a => '<option value="' + a.id + '">' + WF.esc(a.account_label || a.account_name || a.platform) + ' (' + WF.esc(a.platform_info || a.platform) + ')</option>').join('')
+        : '<option value="">No connected accounts</option>';
+    } catch (e) {}
+  }
+
+  async function publish(mode) {
+    const account = document.getElementById('mp_account').value;
+    if (!account) { WF.toast('Select an account'); return; }
+    const c = window._mpContent || {};
+    const scheduleVal = document.getElementById('mp_schedule').value;
+    const scheduledAt = scheduleVal ? Math.floor(new Date(scheduleVal).getTime() / 1000) : null;
+
+    const body = {
+      account_id: +account,
+      content_type: c.content_type || 'article',
+      content_id: c.content_id || 0,
+      content_url: c.content_url || '',
+      content_title: document.getElementById('mp_caption').value || c.content_title || '',
+      content_summary: c.content_summary || '',
+      content_image: c.content_image || '',
+      custom_caption: document.getElementById('mp_caption').value,
+      custom_hashtags: document.getElementById('mp_tags').value,
+      media_url: document.getElementById('mp_media').value || c.content_image || '',
+      publish_now: mode === 'publish',
+      scheduled_at: scheduledAt,
+      // Drafts are stored as 'pending' so the scheduler never auto-publishes them.
+      status: mode === 'draft' ? 'pending' : (scheduledAt ? 'scheduled' : 'queued')
+    };
+
+    try {
+      const d = await WF.api('/social/posts/manual', { method: 'POST', body: JSON.stringify(body) });
+      if (mode === 'publish') WF.toast('Posting initiated');
+      else if (mode === 'schedule') WF.toast('Post scheduled for ' + (scheduleVal || 'now'));
+      else WF.toast('Draft saved');
+      WF.router.go('/admin/social/queue');
+    } catch (e) { WF.toast(e.message); }
+  }
+
+  document.getElementById('mp_publish').addEventListener('click', () => publish('publish'));
+  document.getElementById('mp_scheduleBtn').addEventListener('click', () => publish('schedule'));
+  document.getElementById('mp_draft').addEventListener('click', () => publish('draft'));
+};
+
+// ----- Content Queue -----
+WF.views.adminSocialQueue = async function (app) {
+  if (!adminGuard()) { WF.router.go('/admin/social'); return; }
+  setMeta('Content Queue', 'Review and manage the posting queue');
+  app.innerHTML = '<div class="page-title">🗂️ Content Queue</div><a class="see-all" href="#/admin/social">← Social</a>' +
+    '<p class="muted">Posts waiting to be published or pending your approval.</p>' +
+    '<div class="card" style="margin-top:14px"><h3>Queued / Retrying</h3><div id="soc_auto"></div></div>' +
+    '<div class="card" style="margin-top:14px"><h3>Scheduled</h3><div id="soc_scheduled"></div></div>' +
+    '<div class="card" style="margin-top:14px"><h3>Pending Approval</h3><div id="soc_pending"></div></div>';
+
+  loadQueue();
+
+  async function loadQueue() {
+    const autoEl = document.getElementById('soc_auto');
+    const schedEl = document.getElementById('soc_scheduled');
+    const pendingEl = document.getElementById('soc_pending');
+    try {
+      const d = await WF.api('/social/queue');
+      const queue = d.queue || [];
+      const retryCue = queue.filter(q => q.status === 'queued');
+      const scheduled = queue.filter(q => q.status === 'scheduled');
+      const pending = queue.filter(q => q.status === 'pending');
+
+      autoEl.innerHTML = retryCue.length
+        ? retryCue.map(p => '<div class="list-item"><div style="flex:1"><strong>' + WF.esc(p.content_title || p.content_url || 'Post ' + p.id) + '</strong>' +
+          '<div class="muted" style="font-size:.75rem">' + WF.esc(p.platform || '') + ' · ' +
+          (p.retry_count > 0 ? 'attempt ' + p.retry_count + '/' + (p.max_retries || 3) + ' · ' : '') +
+          (p.failed_reason ? '<span style="color:#c77700">' + WF.esc(p.failed_reason) + '</span> · ' : '') +
+          (p.next_retry_at ? 'retry ' + new Date(p.next_retry_at * 1000).toLocaleTimeString() : 'auto') + '</div></div>' +
+          '<span class="pill" style="background:#c77700">queued</span>' +
+          '<button class="btn btn-sm btn-outline" data-approve="' + p.id + '">Retry now</button>' +
+          '<button class="btn btn-sm btn-danger" data-del="' + p.id + '">Delete</button></div>').join('')
+        : '<p class="muted">No queued or retrying posts.</p>';
+
+      schedEl.innerHTML = scheduled.length
+        ? scheduled.map(p => '<div class="list-item"><div style="flex:1"><strong>' + WF.esc(p.content_title || p.content_url || 'Post ' + p.id) + '</strong>' +
+          '<div class="muted" style="font-size:.75rem">' + WF.esc(p.platform || '') + ' · scheduled ' + (p.scheduled_at ? new Date(p.scheduled_at * 1000).toLocaleString() : 'now') + '</div></div>' +
+          '<span class="pill" style="background:#1f6feb">scheduled</span>' +
+          '<button class="btn btn-sm btn-outline" data-approve="' + p.id + '">Publish now</button>' +
+          '<button class="btn btn-sm btn-danger" data-del="' + p.id + '">Delete</button></div>').join('')
+        : '<p class="muted">No scheduled posts.</p>';
+
+      pendingEl.innerHTML = pending.length
+        ? pending.map(p => '<div class="list-item"><div style="flex:1"><strong>' + WF.esc(p.content_title || '') + '</strong>' +
+          '<div class="muted" style="font-size:.75rem">' + WF.esc(p.platform || '') + ' · ' + WF.esc(p.content_type) + ' · ' + WF.esc(p.post_type === 'automatic' ? 'auto approval' : 'draft') + '</div></div>' +
+          '<button class="btn btn-sm btn-primary" style="background:#0a7d3c" data-approve="' + p.id + '">Approve & Publish</button>' +
+          '<button class="btn btn-sm btn-danger" data-del="' + p.id + '">Delete</button></div>').join('')
+        : '<p class="muted">No posts pending approval.</p>';
+
+      [autoEl, schedEl].forEach(sec => sec.querySelectorAll('[data-approve]').forEach(b => b.addEventListener('click', async () => {
+        try {
+          const r = await WF.api('/social/posts/' + b.dataset.approve + '/approve', { method: 'POST' });
+          WF.toast(r.message || 'Published');
+          loadQueue();
+        } catch (e) { WF.toast(e.message); }
+      })));
+      pendingEl.querySelectorAll('[data-approve]').forEach(b => b.addEventListener('click', async () => {
+        try {
+          const r = await WF.api('/social/posts/' + b.dataset.approve + '/approve', { method: 'POST' });
+          WF.toast(r.message || 'Approved and published');
+          loadQueue();
+        } catch (e) { WF.toast(e.message); }
+      }));
+      document.querySelectorAll('#soc_auto [data-del], #soc_scheduled [data-del], #soc_pending [data-del]').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this post?')) return;
+        await WF.api('/social/posts/' + b.dataset.del, { method: 'DELETE' });
+        loadQueue();
+      }));
+    } catch (e) {
+      autoEl.innerHTML = '<p class="muted">Could not load queue.</p>';
+    }
+  }
+};
+
+// ----- Post Logs -----
+WF.views.adminSocialLogs = async function (app) {
+  if (!adminGuard()) { WF.router.go('/admin/social'); return; }
+  setMeta('Post Logs', 'Social media posting activity log');
+  app.innerHTML = '<div class="page-title">📋 Post Logs</div><a class="see-all" href="#/admin/social">← Social</a>' +
+    '<div class="card" style="margin-top:14px"><h3>All Post Activity</h3>' +
+    '<div class="form-row" style="display:flex;gap:10px">' +
+    '<select id="log_acc" style="flex:1"><option value="">All accounts</option></select>' +
+    '<select id="log_status"><option value="">All statuses</option><option value="ok">Success</option><option value="failed">Failed</option></select>' +
+    '</div><div id="soc_logs"></div></div>';
+
+  loadAccounts();
+  loadLogs();
+
+  async function loadAccounts() {
+    try {
+      const d = await WF.api('/social/accounts');
+      const accounts = d.accounts || [];
+      document.getElementById('log_acc').innerHTML = '<option value="">All accounts</option>' +
+        accounts.map(a => '<option value="' + a.id + '">' + WF.esc(a.account_label || a.account_name || a.platform) + '</option>').join('');
+    } catch (e) {}
+  }
+
+  async function loadLogs() {
+    const el = document.getElementById('soc_logs');
+    const acc = document.getElementById('log_acc').value;
+    const status = document.getElementById('log_status').value;
+    try {
+      const d = await WF.api('/social/logs?limit=100' + (acc ? '&account_id=' + acc : ''));
+      const logs = (d.logs || []).filter(l => !status || l.status === status);
+      el.innerHTML = logs.length
+        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>When</th><th>Platform</th><th>Action</th><th>Status</th><th>HTTP</th><th>Message</th></tr></thead><tbody>' +
+          logs.map(l => '<tr><td class="muted" style="font-size:.72rem">' + new Date(l.attempted_at * 1000).toISOString().slice(0, 16) + '</td>' +
+            '<td>' + WF.esc(l.platform || '') + '</td>' +
+            '<td class="muted">' + WF.esc(l.action || '') + '</td>' +
+            '<td><span class="pill" style="background:' + (l.status === 'ok' ? '#1a7f37' : l.status === 'failed' ? '#d40000' : '#c77700') + '">' + WF.esc(l.status) + '</span></td>' +
+            '<td class="muted">' + (l.http_status || '') + '</td>' +
+            '<td class="muted" style="font-size:.75rem;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + WF.esc(l.message || '') + '</td></tr>').join('') +
+          '</tbody></table></div>'
+        : '<p class="muted">No log entries.</p>';
+    } catch (e) { el.innerHTML = '<p class="muted">Could not load logs.</p>'; }
+  }
+
+  document.getElementById('log_acc').addEventListener('change', loadLogs);
+  document.getElementById('log_status').addEventListener('change', loadLogs);
 };

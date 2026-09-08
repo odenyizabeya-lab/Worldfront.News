@@ -16,6 +16,8 @@ const { runApiProviders } = require('./ingest/api');
 const { maybeSync: syncShop, autoPublish: autoPublishShopProducts } = require('./integrations/weverse-shop');
 const { redeployProduction, rebuildNow } = require('./integrations/deploy');
 const distribution = require('./distrib/engine');
+const socialRoutes = require('./routes/social');
+const socialAuthRoutes = require('./routes/social-auth');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -56,6 +58,8 @@ async function start() {
   app.use('/api/auth', userRoutes);
   app.use('/api/location', locationRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/social', socialAuthRoutes);
+  app.use('/api/social', socialRoutes);
 
   // Vercel cron: hourly auto-publish of Weverse Shop products (new day /
   // missing-today / catalog-count-change all trigger a fresh complete
@@ -121,6 +125,35 @@ async function start() {
     try {
       const r = await distribution.tick();
       res.json(r);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Social media auto-poster cron trigger. Runs the auto-posting scheduler —
+  // picks due posts from the queue, publishes to every connected platform,
+  // retries safely, prevents duplicates, and honours the pause setting.
+  // Called every 15 minutes by the GitHub Actions workflow (primary, free) and
+  // optionally by a Vercel cron on Pro plans. The in-process node-cron in
+  // `start()` only fires while a serverless instance stays warm, so the
+  // external trigger is what keeps automatic posting reliable in production.
+  app.post('/api/cron/social-tick', async (req, res) => {
+    const isVercelCron = req.headers['x-vercel-cron'] === '1';
+    const bearer = String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+    const isActionsCron = !!process.env.HOURLY_CRON_TOKEN && bearer === process.env.HOURLY_CRON_TOKEN;
+    if (!isVercelCron && !isActionsCron) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    try {
+      const paused = db.get("SELECT value FROM settings WHERE key='social_automation_paused'");
+      if (paused && paused.value === '1') {
+        return res.json({ ok: true, paused: true, result: { posts_published: 0, posts_failed: 0, posts_created: 0, retries: 0 } });
+      }
+      const scheduler = require('./lib/social/scheduler');
+      const result = await scheduler.schedulerTick();
+      db.run("INSERT OR REPLACE INTO settings (key,value) VALUES ('social_last_scheduler_run',?)", [String(db.now())]);
+      db.persist();
+      res.json({ ok: true, result });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -217,7 +250,27 @@ async function start() {
       }
     });
 
-    console.log('Cron scheduled every 15 minutes. Session cleanup daily at 3 AM. Distribution daily at 6 AM.');
+    // Social media automation: check every 15 minutes for due posts. The
+    // per-rule time window is ±15 minutes, so a 15-minute tick guarantees
+    // every rule minute is covered. Respects the global pause setting and
+    // per-account enable/disable.
+    cron.schedule('*/15 * * * *', async () => {
+      try {
+        const paused = db.get("SELECT value FROM settings WHERE key='social_automation_paused'");
+        if (paused && paused.value === '1') return;
+        const scheduler = require('./lib/social/scheduler');
+        const r = await scheduler.schedulerTick();
+        if (r.posts_published > 0 || r.posts_failed > 0) {
+          console.log(`Social scheduler: published=${r.posts_published} failed=${r.posts_failed} created=${r.posts_created} retries=${r.retries}`);
+        }
+        db.run("INSERT OR REPLACE INTO settings (key,value) VALUES ('social_last_scheduler_run',?)", [String(db.now())]);
+        db.persist();
+      } catch (e) {
+        console.error('Social scheduler error:', e.message);
+      }
+    });
+
+    console.log('Cron scheduled every 15 minutes. Session cleanup daily at 3 AM. Distribution daily at 6 AM. Social media every 15 minutes.');
   }
 }
 

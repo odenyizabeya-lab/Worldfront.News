@@ -1,0 +1,38 @@
+name: Social media auto-poster
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: social-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger social media scheduler tick
+        env:
+          HOURLY_CRON_TOKEN: ${{ secrets.HOURLY_CRON_TOKEN }}
+        run: |
+          code=$(curl -s -o /tmp/wf-social.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${HOURLY_CRON_TOKEN}" \
+            -H "Content-Type: application/json" \
+            https://www.worldfront.news/api/cron/social-tick)
+          echo "status=$code"
+          body=$(cat /tmp/wf-social.json)
+          echo "response=$body"
+          echo
+          echo "published=$(echo "$body" | grep -o '"posts_published":[0-9]*' | head -1)"
+          echo "created=$(echo "$body" | grep -o '"posts_created":[0-9]*' | head -1)"
+          echo "failed=$(echo "$body" | grep -o '"posts_failed":[0-9]*' | head -1)"
+          echo "retries=$(echo "$body" | grep -o '"retries":[0-9]*' | head -1)"
+          echo "paused=$(echo "$body" | grep -o '"paused":[a-z]*' | head -1)"
+          echo "error=$(echo "$body" | grep -o '"error":"[^"]*"' | head -1)"
+          if [ "$code" != "200" ]; then exit 1; fi

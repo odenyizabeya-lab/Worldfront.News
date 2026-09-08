@@ -1,4 +1,4 @@
-const CACHE = 'worldfront-v5';
+const CACHE = 'worldfront-v6';
 const SHELL = [
   '/',
   '/manifest.webmanifest',

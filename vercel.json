@@ -24,6 +24,7 @@
   "crons": [
     { "path": "/api/cron/shop-publish", "schedule": "0 0 * * *" },
     { "path": "/api/cron/shop-redeploy", "schedule": "30 0 * * *" },
-    { "path": "/api/cron/shop-distribute", "schedule": "45 4 * * *" }
+    { "path": "/api/cron/shop-distribute", "schedule": "45 4 * * *" },
+    { "path": "/api/cron/social-tick", "schedule": "*/15 * * * *" }
   ]
 }
